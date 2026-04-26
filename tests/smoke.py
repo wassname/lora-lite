@@ -132,6 +132,7 @@ def variant_test(variant: str, dtype=torch.float32):
         "ia3": 1e-6,
         "dora": 5e-5,     # m * V/||V|| with V=W -> rounding in norm/divide
         "hra": 1e-6,      # gate=0 -> exact identity
+        "antipasto": 5e-4,  # SVD truncation + W_res reconstruction in fp32
     }[variant] * max(1.0, base_scale)
     assert err < tol, f"  FAIL identity: err {err} > tol {tol}"
     print(f"  SHOULD: err<{tol:.1e}. PASS.")
@@ -173,6 +174,8 @@ def variant_test(variant: str, dtype=torch.float32):
         opt = torch.optim.Adam(trainable, lr=1e-1)
     elif variant == "dora":
         opt = torch.optim.Adam(trainable, lr=1e-3)  # m near ||W||_c, bigger lr blows up
+    elif variant == "antipasto":
+        opt = torch.optim.Adam(trainable, lr=1e-2)  # delta_s + rot_T, sensitive
     else:
         opt = torch.optim.SGD(trainable, lr=1e-2)
     losses = []
@@ -278,13 +281,61 @@ def bitsandbytes_cuda_smoke(require_bnb: bool):
             del model
 
 
+def eva_smoke():
+    """EVA needs calibration data: drives forward + per-target SVD on inputs."""
+    print("\n=== variant=eva (data-driven init via group_init+calibration_data) ===")
+    torch.manual_seed(0)
+    model = TinyModel().to(torch.float32)
+    ids = torch.randint(0, 100, (2, 16))
+    with torch.no_grad():
+        y_base = model(ids).clone()
+
+    cfg = ll.LoraLiteConfig(variant="eva", r=4, alpha=8, dtype=torch.float32)
+    # 4 calibration batches of random ids
+    calib = [torch.randint(0, 100, (2, 16)) for _ in range(4)]
+    ll.attach(model, cfg, calibration_data=calib)
+    n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"  trainable params={n_trainable} (should be only lora_B since A is buffer)")
+
+    with torch.no_grad():
+        y_adapt = model(ids)
+    err = (y_adapt - y_base).abs().max().item()
+    print(f"  t=0 identity: max|y_adapt - y_base| = {err:.3e}")
+    assert err < 1e-6, f"EVA should be exact identity (B=0); got {err}"
+    print("  SHOULD: err==0 (B=0 init). PASS.")
+
+    # check A buffer is non-zero (data-driven)
+    a_norms = [layer.lora_A.norm().item() for layer in [m for m in model.modules() if hasattr(m, "lora_A")]]
+    assert all(n > 0 for n in a_norms), "EVA lora_A buffers all zero -> group_init never ran"
+    print(f"  SHOULD: lora_A buffers populated. PASS (mean ||A||={sum(a_norms)/len(a_norms):.3f}).")
+
+    # gradient flow: only B trains
+    target = torch.randn(2, 16, 100, dtype=torch.float32) * 0.1
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    opt = torch.optim.SGD(trainable, lr=1e-2)
+    losses = []
+    for _ in range(20):
+        opt.zero_grad()
+        loss = (model(ids) - target).pow(2).mean()
+        loss.backward()
+        assert_no_base_grads(model)
+        opt.step()
+        losses.append(loss.item())
+    drop = (losses[0] - losses[-1]) / max(losses[0], 1e-12)
+    print(f"  loss[0]={losses[0]:.4f}  loss[-1]={losses[-1]:.4f}  drop={100*drop:.1f}%")
+    assert drop > 0.05
+    print("  SHOULD: drop>5%. PASS.")
+    ll.detach(model)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--require-bnb", action="store_true")
     args = parser.parse_args()
 
-    for v in ("lora", "pissa", "delora", "ia3", "dora", "hra"):
+    for v in ("lora", "pissa", "delora", "ia3", "dora", "hra", "antipasto"):
         variant_test(v, dtype=torch.float32)
+    eva_smoke()
     structural_linear_like_test()
     bitsandbytes_cuda_smoke(args.require_bnb)
     print("\nALL PASS.")

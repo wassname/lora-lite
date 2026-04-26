@@ -1,26 +1,28 @@
-"""IA3-style output gating. Liu et al. 2022  https://arxiv.org/abs/2205.05638
+"""IA3-style elementwise gating. Liu et al. 2022  https://arxiv.org/abs/2205.05638
 
-    y_new = y * g,    g initialized to 1  (identity at t=0)
+Two registered variants, matching the paper's two regimes:
 
-DEVIATION FROM PAPER:
-    The original IA3 gates only three positions per transformer block:
-        l_k * (k_proj output),  l_v * (v_proj output),  l_ff * (FFN intermediate after activation)
-    This implementation gates ANY linear layer the targeting system selects.
-    To match the paper exactly on a typical Llama/Qwen-style block, attach with:
+* `ia3`     -- OUTPUT-side gating, parameter shape (d_out,).
+              y_new = y * g.  Use for attention projections (k_proj, v_proj).
 
-        cfg = LoraLiteConfig(
-            variant="ia3",
-            target_names=(r"\\.k_proj$", r"\\.v_proj$", r"\\.up_proj$"),
-            target_roles=(),
-        )
+* `ia3_ff`  -- INPUT-side gating, parameter shape (d_in,).
+              y_new = base_layer(x * g).  Use for FFN-down layers (down_proj,
+              fc2). Equivalent to the paper's "gate the FFN intermediate (post-
+              activation)" position because down_proj's input IS that
+              intermediate hidden state.
 
-    `up_proj` is the closest stand-in for "FFN intermediate" in gated-MLP blocks
-    (Llama uses gate * up; gating the up branch is the IA3-spirit choice).
+In both cases g is initialized to 1 -> identity at t=0.
 
-Reference implementations (for review/cross-check):
-  - peft IA3 layer (uses ia3_l elementwise scaling, fan_in_fan_out aware):
+To match the paper exactly on a Llama/Qwen-style block requires TWO attach
+passes (one per variant), since each variant uses one hook type:
+
+    cfg_attn = LoraLiteConfig(variant="ia3",    target_names=(r"\\.k_proj$", r"\\.v_proj$"))
+    cfg_ffn  = LoraLiteConfig(variant="ia3_ff", target_names=(r"\\.down_proj$",))
+
+Reference implementation:
+  - peft IA3 layer (is_feedforward toggles input-vs-output gating, see
+    docs/refs/peft_ia3_layer.py:177-188 forward and :214 update_layer):
     https://github.com/huggingface/peft/blob/main/src/peft/tuners/ia3/layer.py
-    (offline: docs/refs/peft_ia3_layer.py)
 """
 import torch
 from torch import nn
@@ -43,3 +45,20 @@ class IA3:
     @staticmethod
     def forward(layer: nn.Linear, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         return y * layer.lora_g
+
+
+@register
+class IA3FF:
+    name = "ia3_ff"
+
+    @staticmethod
+    def param_specs(d_in, d_out, cfg):
+        return {"lora_g": ParamSpec((d_in,), init="ones", trainable=True)}
+
+    @staticmethod
+    def init(layer: nn.Linear, cfg) -> None:
+        return
+
+    @staticmethod
+    def forward_input(layer: nn.Linear, x: torch.Tensor) -> torch.Tensor:
+        return x * layer.lora_g

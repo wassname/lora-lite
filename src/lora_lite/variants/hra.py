@@ -9,27 +9,22 @@ so the layer output becomes  y' = W' x = W (R x).  R is in INPUT space (d_in x d
 We implement this via a `forward_input` pre-hook that returns `R x`, then the
 frozen base layer (including bnb 4/8-bit Linear) computes `W (R x)` itself.
 
-Identity at t=0: `lora_gate` is initialized to 0 and gates each Householder
-vector, so the effective u_i starts at 0 -> H_i = I -> R = I -> y' = y.
-At training time the gate scales the active reflection direction.
+Identity at t=0 (PEFT-style symmetric init, requires even r):
+  Rows are kaiming-init in pairs: U[0]=U[1], U[2]=U[3], ...  Adjacent pairs of
+  Householder reflections with identical vectors cancel exactly
+  (H_i H_i = I), so R = I at init -> y' = y to bit-precision.
+  After the first gradient step the paired rows diverge and the chain becomes a
+  general orthogonal matrix; gradient flows into U from step 0 (no dead-grad).
+  Odd r is rejected (matches peft warning behaviour).
 
-KNOWN GRADIENT ISSUE (flagged by external review 2026-04-26):
-  Forward is `x + gate * (Rx - x)`. With gate=0 at init, d_output/d_U is
-  proportional to gate, so on step 0 ONLY `lora_gate` receives gradient;
-  `lora_U` is dead. Once gate moves off zero, U starts learning. This deviates
-  from the paper, which has no such gate -- paper uses orthogonal init of U so
-  R != I from step 0. We trade paper-faithful init for identity-at-init.
-
-OMITTED: paper also adds an orthogonality regularizer
-    lambda * sum_i (u_i^T u_j)^2          (Eq. 6 / Sec. 3.3)
-which is a loss term, not a forward-pass change. Add it in your training loop if
-you want the regularized HRA variant.
+OMITTED: paper also adds an orthogonality regularizer (Eq. 6 / Sec. 3.3),
+a loss-side term. Add it in your training loop if you want regularized HRA.
 
 Reference implementations (for review/cross-check):
   - HRA paper authors (DaShenZi721/HRA), llama variant of OFT layer with HRA:
     https://github.com/DaShenZi721/HRA/blob/master/llama/peft/oft/layer_GS_HRA.py
     (offline: docs/refs/orig_hra_layer.py)
-  - peft HRA layer (cleaner, includes apply_GS toggle for orthogonalization):
+  - peft HRA layer, reset_hra_parameters (lines 100-108):
     https://github.com/huggingface/peft/blob/main/src/peft/tuners/hra/layer.py
     (offline: docs/refs/peft_hra_layer.py)
 """
@@ -46,20 +41,33 @@ class HRA:
 
     @staticmethod
     def param_specs(d_in, d_out, cfg):
+        if cfg.r % 2 != 0:
+            raise ValueError(
+                f"HRA symmetric init requires even r; got r={cfg.r}. "
+                "Pick an even rank or use a different variant."
+            )
         return {
-            # one Householder vector per rank slot in INPUT space R^{d_in}
-            "lora_U": ParamSpec((cfg.r, d_in), init="kaiming", trainable=True),
-            # identity gate; 0 -> R = I exactly
-            "lora_gate": ParamSpec((), init="zeros", trainable=True),
+            # Householder vectors stacked as rows (one vector per rank slot)
+            # init done in init() to enforce paired rows -> R = I at t=0.
+            "lora_U": ParamSpec((cfg.r, d_in), init="zeros", trainable=True),
         }
 
     @staticmethod
     def init(layer: nn.Linear, cfg) -> None:
+        # Symmetric init per peft (docs/refs/peft_hra_layer.py:101-108):
+        #   half = kaiming(r//2, d_in); U = repeat_interleave(half, 2, dim=0)
+        # Adjacent pairs (H_2k H_2k+1) cancel since H^2 = I, so R = I exactly,
+        # while gradient still flows into U from step 0.
+        with torch.no_grad():
+            r, d_in = layer.lora_U.shape
+            half = torch.empty(r // 2, d_in, dtype=layer.lora_U.dtype, device=layer.lora_U.device)
+            nn.init.kaiming_uniform_(half, a=5 ** 0.5)
+            layer.lora_U.copy_(torch.repeat_interleave(half, 2, dim=0))
         return
 
     @staticmethod
     def forward_input(layer: nn.Linear, x: torch.Tensor) -> torch.Tensor:
-        """Apply x + gate * (Rx - x). gate=0 -> identity; nonzero -> full Householder chain."""
+        """Apply Rx where R = prod_i H_i, H_i = I - 2 u_i u_i^T / ||u_i||^2."""
         U = layer.lora_U                                     # (r, d_in)
         Rx = x
         for i in range(U.shape[0]):
@@ -67,4 +75,4 @@ class HRA:
             sq = (u * u).sum().clamp_min(1e-12)
             coeff = einsum(Rx, u, "... i, i -> ...") * (2.0 / sq)
             Rx = Rx - coeff.unsqueeze(-1) * u
-        return x + layer.lora_gate * (Rx - x)
+        return Rx

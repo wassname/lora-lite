@@ -6,9 +6,11 @@ W_eff(t=0) = W_res + B@A = W (numerically; bf16 round-trip not bit-exact).
 DEVIATION FROM PAPER (documented):
   - Paper sets adapter scale = 1 (no alpha/r factor); we keep LoRA's alpha/r
     pipeline so callers must pass alpha=r to get paper-faithful identity.
-  - Saved adapter does NOT include W_res; load() recomputes PiSSA init on the
-    *same-seed base* before overwriting A/B. Reload is exact only on identical
-    base weights.
+  - Saved adapter does NOT include W_res (would double checkpoint size). Instead
+    `adapter.save` records a fingerprint of the post-init base weights and
+    `adapter.load` re-runs PiSSA init then verifies the fingerprint matches
+    -- so loading onto a different base weight raises loudly instead of
+    silently producing wrong outputs.
 
 Reference implementations (for review/cross-check):
   - PiSSA original (NeurIPS'24 spotlight) init script (SVD on dequant W):

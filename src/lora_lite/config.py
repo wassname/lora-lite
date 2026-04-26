@@ -8,7 +8,6 @@ class LoraLiteConfig:
     variant: str = "lora"
     r: int = 8
     alpha: float = 16.0
-    dropout: float = 0.0  # currently ignored; variants may use cfg.variant_kwargs
     dtype: torch.dtype = torch.bfloat16
 
     # targeting

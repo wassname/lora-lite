@@ -48,8 +48,12 @@ def attach(model: nn.Module, cfg: LoraLiteConfig, calibration_data=None) -> list
         for pname, spec in variant.param_specs(d_in, d_out, cfg).items():
             if hasattr(layer, pname):
                 raise RuntimeError(f"{name} already has attribute {pname}; detach first")
-            p = spec.make(cfg.dtype, layer.weight.device)
-            layer.register_parameter(pname, p)
+            if spec.as_buffer:
+                t = spec.make_tensor(cfg.dtype, layer.weight.device)
+                layer.register_buffer(pname, t, persistent=True)
+            else:
+                p = spec.make(cfg.dtype, layer.weight.device)
+                layer.register_parameter(pname, p)
         layer._lora_cfg = cfg
         layer._lora_variant = variant
         layer._lora_role = role
@@ -85,10 +89,31 @@ def detach(model: nn.Module) -> None:
         for pname in variant.param_specs(layer.in_features, layer.out_features, layer._lora_cfg):
             if pname in layer._parameters:
                 del layer._parameters[pname]
+            elif pname in layer._buffers:
+                del layer._buffers[pname]
         for attr in ("_lora_cfg", "_lora_variant", "_lora_role"):
             if hasattr(layer, attr):
                 delattr(layer, attr)
     delattr(model, _ATTACHED_ATTR)
+
+
+def _base_weight_fingerprint(model: nn.Module) -> dict[str, str]:
+    """Per-target fingerprint of the (post-init) base weights so PiSSA-style
+    variants that mutate `layer.weight` can fail loud on base mismatch.
+    Uses a cheap fp32 sum-of-squares + shape signature; not cryptographic.
+    """
+    state = getattr(model, _ATTACHED_ATTR, None)
+    if state is None:
+        return {}
+    fp = {}
+    for name, layer in model.named_modules():
+        if not hasattr(layer, "_lora_variant"):
+            continue
+        if name not in state["targets"]:
+            continue
+        w = layer.weight.detach().to(torch.float32, copy=False)
+        fp[name] = f"{tuple(w.shape)}|{float((w * w).sum()):.6e}"
+    return fp
 
 
 def save(model: nn.Module, path: str) -> None:
@@ -96,7 +121,12 @@ def save(model: nn.Module, path: str) -> None:
     if state is None:
         raise RuntimeError("no adapter attached; call attach() first")
     sd = {k: v.detach().cpu() for k, v in model.state_dict().items() if "lora_" in k}
-    torch.save({"cfg": state["cfg"].to_dict(), "state": sd}, path)
+    blob = {
+        "cfg": state["cfg"].to_dict(),
+        "state": sd,
+        "base_fp": _base_weight_fingerprint(model),
+    }
+    torch.save(blob, path)
 
 
 def load(model: nn.Module, path: str) -> list[RemovableHandle]:
@@ -111,4 +141,14 @@ def load(model: nn.Module, path: str) -> list[RemovableHandle]:
     unexpected_lora = [k for k in unexpected if "lora_" in k]
     if unexpected_lora:
         raise RuntimeError(f"unexpected lora keys in checkpoint: {unexpected_lora}")
+    saved_fp = blob.get("base_fp", {})
+    if saved_fp:
+        cur_fp = _base_weight_fingerprint(model)
+        diffs = [k for k in saved_fp if saved_fp[k] != cur_fp.get(k)]
+        if diffs:
+            raise RuntimeError(
+                f"base weight fingerprint mismatch on {len(diffs)} layer(s) "
+                f"(e.g. {diffs[0]}). For PiSSA the saved adapter assumes the same "
+                "base; reload onto the original model or re-run init."
+            )
     return handles

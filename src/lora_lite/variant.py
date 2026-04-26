@@ -12,8 +12,9 @@ class ParamSpec:
     shape: tuple[int, ...]
     init: str | Callable[[torch.Tensor], None] = "zeros"  # 'zeros'|'kaiming'|'ones'|callable(t)
     trainable: bool = True
+    as_buffer: bool = False  # if True, register_buffer instead of register_parameter
 
-    def make(self, dtype: torch.dtype, device) -> nn.Parameter:
+    def _empty(self, dtype: torch.dtype, device) -> torch.Tensor:
         t = torch.empty(self.shape, dtype=dtype, device=device)
         if callable(self.init):
             self.init(t)
@@ -26,7 +27,17 @@ class ParamSpec:
             nn.init.kaiming_uniform_(t, a=5 ** 0.5) if t.ndim >= 2 else t.normal_(0, 0.02)
         else:
             raise ValueError(f"unknown init: {self.init}")
-        return nn.Parameter(t, requires_grad=self.trainable)
+        return t
+
+    def make(self, dtype: torch.dtype, device) -> nn.Parameter:
+        # legacy entry: returns a Parameter (used for trainable adapter params)
+        if self.as_buffer:
+            raise RuntimeError("as_buffer spec must be installed via register_buffer; see adapter.attach")
+        return nn.Parameter(self._empty(dtype, device), requires_grad=self.trainable)
+
+    def make_tensor(self, dtype: torch.dtype, device) -> torch.Tensor:
+        # returns a raw tensor for buffer registration
+        return self._empty(dtype, device)
 
 
 class Variant(Protocol):
