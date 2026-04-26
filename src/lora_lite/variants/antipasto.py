@@ -9,6 +9,14 @@ wassname 2026  https://arxiv.org/abs/2601.07473
 
 Identity at t=0: rot_T=0 -> R=I, delta_s=0 -> y == x @ W^T (fp32 SVD round-trip).
 
+Scope cut vs antipasto3: this is a fine-tuning adapter, not the full runtime
+steering interface. There is no per-call alpha, so it does not expose the
+bidirectional R(+alpha) / R(-alpha) inference symmetry. The V-basis path uses the
+opposite chirality to antipasto3's default U-basis path, so checkpoints are not
+portable without a sign/basis convention. Zero-init is stricter identity than
+antipasto3's small positive/random symmetry-breaking init, but can leave rotation
+learning to be started by the task gradient rather than init noise.
+
 Refs:
   - paper: https://github.com/wassname/AntiPaSTO
   - lite port of: https://github.com/wassname/antipasto3

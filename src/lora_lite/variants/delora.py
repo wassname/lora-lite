@@ -8,7 +8,8 @@ Per peft upstream: ||W|| is per-input-channel (not scalar Frobenius), and
 per-rank norms divide inside the diag (not via F.normalize on A,B) so
 gradients flow through un-normalized parameters.
 
-Identity at t=0: lambda0=0 -> delta=0 (bit-identity).
+Identity at t=0 comes from B=0, so any lambda0 keeps delta=0. Keep lambda0
+nonzero for training: lambda0=0 makes every DeLoRA gradient zero on step 0.
 
 Refs:
   - paper code: https://github.com/ExplainableML/DeLoRA/blob/main/peft/src/peft/tuners/delora.py
@@ -30,9 +31,9 @@ from ..config import AdapterConfig, register_config
 @dataclass
 class DeLoRAConfig(AdapterConfig):
     variant: str = "delora"
-    # 0.0 = bit-identity at t=0, but A,B get zero grad until lambda moves
-    # (delta ∝ lambda). peft default is 15.0.
-    lambda0: float = 0.0
+    # peft/paper default. B=0 preserves t=0 identity; lambda0=0 would make the
+    # whole adapter dead on step 0 because delta and all gradients scale by lambda.
+    lambda0: float = 15.0
 
 
 @register

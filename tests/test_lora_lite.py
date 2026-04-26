@@ -99,12 +99,10 @@ class FakeBnbModel(nn.Module):
 
 
 def cfg_for(variant: str) -> ll.AdapterConfig:
-    extra = {"lambda0": 0.1} if variant == "delora" else {}
     return CFG_BY_VARIANT[variant](
         r=4,
-        alpha=4 if variant == "pissa" else 8,
+        alpha=8,
         dtype=torch.float32,
-        **extra,
     )
 
 
@@ -219,6 +217,57 @@ def test_eva_requires_calibration():
     """EVA's group_init must error loudly if calibration_data is missing."""
     with pytest.raises(ValueError, match="calibration_data"):
         ll.attach(TinyModel(), ll.EVAConfig(r=4, alpha=8, dtype=torch.float32))
+
+
+def test_delora_default_has_live_step0_gradient():
+    """Default lambda0 must be nonzero; B=0 preserves identity while B gets gradient."""
+    torch.manual_seed(0)
+    model = TinyModel(n_layers=1)
+    ids = torch.randint(0, 100, (2, 8))
+    ll.attach(model, ll.DeLoRAConfig(r=4, alpha=8, dtype=torch.float32))
+
+    assert model.layers[0].q_proj.lora_lambda.item() == pytest.approx(15.0)
+    loss = model(ids).pow(2).mean()
+    loss.backward()
+
+    b_grad = model.layers[0].q_proj.lora_B.grad.detach().abs().max().item()
+    assert b_grad > 0
+
+
+def test_pissa_identity_with_nonunit_scale():
+    """Regression: PiSSA must pre-divide S by alpha/r, not require alpha == r."""
+    torch.manual_seed(0)
+    model = TinyModel(n_layers=1)
+    ids = torch.randint(0, 100, (2, 8))
+    with torch.no_grad():
+        y_base = model(ids).clone()
+
+    ll.attach(model, ll.PiSSAConfig(r=4, alpha=8, dtype=torch.float32))
+    with torch.no_grad():
+        y = model(ids)
+    assert (y - y_base).abs().max().item() < IDENTITY_TOL["pissa"]
+
+
+def test_antipasto_blockwise_rotation_matches_explicit_blockdiag():
+    """The einsum/rearrange path must equal the old explicit blockdiag math."""
+    from lora_lite.variants.antipasto import _build_rotation
+
+    torch.manual_seed(0)
+    n_blocks, bs, d_in, d_out = 3, 4, 7, 5
+    r = n_blocks * bs
+    rot_T = torch.randn(n_blocks, bs * (bs - 1) // 2) * 0.1
+    Vh = torch.randn(r, d_in)
+    U = torch.randn(d_out, r)
+    R_blocks = _build_rotation(rot_T, bs, 0.5)
+    R = torch.block_diag(*list(R_blocks))
+
+    Vh_blocks = torch.reshape(Vh, (n_blocks, bs, d_in))
+    Vh_rot = torch.einsum("nab,nbi->nai", R_blocks, Vh_blocks).reshape(r, d_in)
+    U_blocks = torch.reshape(U, (d_out, n_blocks, bs))
+    U_rot = torch.einsum("dnb,ncb->dnc", U_blocks, R_blocks).reshape(d_out, r)
+
+    assert (Vh_rot - R @ Vh).abs().max().item() < 1e-6
+    assert (U_rot - U @ R.T).abs().max().item() < 1e-6
 
 
 def test_dora_bias_passthrough():
