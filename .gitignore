@@ -8,3 +8,6 @@ __pycache__/
 *.sqlite3
 *.log
 *.bak
+logs/
+outputs/
+tests/_artifacts/

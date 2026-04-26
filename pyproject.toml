@@ -10,7 +10,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["pytest", "tabulate"]
+hf-test = ["accelerate>=1.6", "safetensors>=0.5", "transformers>=4.51"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -18,3 +19,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.uv]
+exclude-newer = "5 days"

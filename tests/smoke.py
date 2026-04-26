@@ -15,7 +15,8 @@ BLUF format:
     SHOULD: loss decreases > 5% over 20 SGD steps for all variants. ELSE grad/wiring bug.
 """
 from __future__ import annotations
-import tempfile, os, sys, math
+import os, sys, math
+from pathlib import Path
 import torch
 from torch import nn
 
@@ -23,6 +24,14 @@ from torch import nn
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import lora_lite as ll  # noqa: E402
+
+
+ARTIFACT_DIR = Path(__file__).parent / "_artifacts"
+
+
+def assert_no_base_grads(model: nn.Module) -> None:
+    leaked = [name for name, p in model.named_parameters() if "lora_" not in name and p.grad is not None]
+    assert leaked == [], f"base params received grads: {leaked}"
 
 
 # ---- a tiny transformer-like stack: 4 blocks of (q,k,v,o, gate,up,down) Linears ----
@@ -106,6 +115,7 @@ def variant_test(variant: str, dtype=torch.float32):
     n_targets = len(handles)
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"  attached {n_targets} targets, trainable params={n_trainable}")
+    assert n_targets == 28, f"expected 28 TinyModel targets, got {n_targets}"
 
     with torch.no_grad():
         y_adapt = model(ids)
@@ -123,25 +133,22 @@ def variant_test(variant: str, dtype=torch.float32):
     print(f"  SHOULD: err<{tol:.1e}. PASS.")
 
     # save/load round-trip
-    with tempfile.TemporaryDirectory() as d:
-        p = os.path.join(d, "adapter.pt")
-        ll.save(model, p)
-        # detach + fresh model + load
-        ll.detach(model)
-        torch.manual_seed(0)
-        model2 = TinyModel().to(dtype)
-        # for PiSSA, base weights got mutated; we need them mutated again for the load
-        # path to make sense. Easiest: re-attach with same cfg first... but that's what
-        # load() does. The catch: load reads cfg from the file, runs attach (which
-        # re-runs PiSSA init -> same SVD on same weights -> same A,B -> mutates W
-        # to the same W_res). Then state_dict overwrites lora_A/B with saved values.
-        ll.load(model2, p)
-        with torch.no_grad():
-            y_loaded = model2(ids)
-        err2 = (y_loaded - y_adapt).abs().max().item()
-        print(f"  save/load: max|y_loaded - y_adapt| = {err2:.3e}")
-        assert err2 < tol, f"  FAIL save/load: {err2} > {tol}"
-        print(f"  SHOULD: err2<{tol:.1e}. PASS.")
+    ARTIFACT_DIR.mkdir(exist_ok=True)
+    p = ARTIFACT_DIR / f"{variant}_smoke_adapter.pt"
+    ll.save(model, str(p))
+    # detach + fresh model + load
+    ll.detach(model)
+    torch.manual_seed(0)
+    model2 = TinyModel().to(dtype)
+    # for PiSSA, base weights got mutated; load() re-runs PiSSA init on the fresh
+    # same-seed base, then overwrites lora_A/B with saved values.
+    ll.load(model2, str(p))
+    with torch.no_grad():
+        y_loaded = model2(ids)
+    err2 = (y_loaded - y_adapt).abs().max().item()
+    print(f"  save/load: max|y_loaded - y_adapt| = {err2:.3e}")
+    assert err2 < tol, f"  FAIL save/load: {err2} > {tol}"
+    print(f"  SHOULD: err2<{tol:.1e}. PASS.")
     ll.detach(model2)
 
     # gradient flow: 20 SGD steps on random target.
@@ -167,6 +174,7 @@ def variant_test(variant: str, dtype=torch.float32):
         opt.zero_grad()
         loss = (model(ids) - target).pow(2).mean()
         loss.backward()
+        assert_no_base_grads(model)
         opt.step()
         losses.append(loss.item())
     drop = (losses[0] - losses[-1]) / max(losses[0], 1e-12)

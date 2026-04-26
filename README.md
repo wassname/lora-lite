@@ -2,6 +2,8 @@
 
 A hackable, single-file-per-variant LoRA library built on PyTorch forward hooks.
 
+<!-- Human this is too long! should be into, code, procedure to get started. why, what is it, an example of a hackable adapter, then minimal features, how to install and use, and links/citation -->
+
 - ~600 LoC total
 - One file per variant, ~50 LoC each
 - No module replacement, no merge/unmerge, no PEFT config soup
@@ -135,13 +137,29 @@ class ActSVD:
 ## Smoke test
 
 ```bash
-python tests/smoke.py
+just test
+just smoke
+just qwen-probe
 ```
 
-Verifies for each of `lora`, `pissa`, `delora`:
+`just test` verifies, for each of `lora`, `pissa`, `delora`:
+
 1. Identity at t=0: `max|y_adapter - y_base|` within float tolerance.
-2. Save/load round-trip preserves outputs.
-3. 20 SGD steps reduce a random regression loss by >5%.
+2. Adapter hooks are live: perturbing only `lora_*` changes outputs.
+3. Save/load round-trip preserves full-path adapter keys and tensors.
+4. Missing or unexpected `lora_*` checkpoint keys fail loudly.
+5. Only `lora_*` parameters are trainable and base parameters get no gradients.
+6. A 20-step tiny regression training probe gets finite nonzero adapter gradients and >5% loss drop.
+
+`just qwen-probe` is the real-model proof. It loads `Qwen/Qwen3-0.6B` fresh per variant, attaches only layer-0 `q_proj`/`v_proj`, trains one fixed LM batch, saves adapters, reloads into a fresh base model, and checks logits match. Last verified on 2026-04-26:
+
+| variant | targets | trainable | identity err | perturb delta | loss0 | lossN | drop % | grad norm | adapter delta | reload err |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| LoRA | 2 | 20,480 | 0 | 0.3750 | 5.250 | 3.131 | 40.36 | 1.432 | 4.262 | 0 |
+| PiSSA | 2 | 20,480 | 0.3125 | 0.7500 | 5.250 | 3.629 | 30.88 | 6.124 | 4.381 | 0 |
+| DeLoRA | 2 | 20,482 | 0.3750 | 0.4062 | 5.246 | 5.166 | 1.537 | 0.04778 | 8.196 | 0 |
+
+This is an interface/training proof, not a benchmark: exact Qwen target names, hook activity, lora-only gradients, loss decrease, adapter tensor save/load, and reload equivalence on a 0.6B HF model.
 
 ## What's NOT in v1
 

@@ -55,6 +55,59 @@ Last verified log: `/home/wassname/.cache/agent-tmp/lora_lite_smoke_after_review
 | bnb `Linear8bitLt` | identity `0.000e+00`, grad nonzero |
 | bnb `Linear4bit` | identity `0.000e+00`, grad nonzero |
 
+## 2026-04-26 testing proof pass
+
+Goal: upgrade from smoke-tested sketch to evidence that the current PEFT-lite interface trains on both toy models and a real HF Qwen model.
+
+### Scope
+
+In:
+
+- Pytest coverage for LoRA, PiSSA, and DeLoRA correctness invariants.
+- A real `Qwen/Qwen3-0.6B` probe that trains each current variant on layer-0 `q_proj` and `v_proj`.
+- Repeatable `just` recipes and workspace-local logs/artifacts.
+
+Out:
+
+- Benchmark claims.
+- Quantized Qwen proof for PiSSA. PiSSA remains fp-only because it mutates `weight`.
+- Full default-target training over every Qwen layer.
+
+### Requirements and evidence
+
+| Requirement | Distinguishing check | Evidence |
+|---|---|---|
+| R1: toy tests catch skipped targets/hooks | Perturb only `lora_*`; output must change. Missing target must raise. | `just test` -> `8 passed in 2.43s` in `logs/pytest.log` |
+| R2: toy tests catch base-gradient leakage | After backward, all non-`lora_*` grads are `None`; all trainable names contain `lora_`. | `just test` -> `8 passed in 2.43s` |
+| R3: save/load is exact for adapters | Saved key set equals full-path `lora_*` state; reload tensors equal; missing/extra `lora_*` keys raise. | `just test` -> `8 passed in 2.43s` |
+| R4: current variants train on tiny task | 28 TinyModel targets; non-`lora_*` grads stay `None`; 20-step loss drop >5%. | `just smoke` -> LoRA 6.1%, PiSSA 11.5%, DeLoRA 93.4% |
+| R5: current variants train on real Qwen | Fresh Qwen per variant; exact targets are layer-0 `q_proj`/`v_proj`; perturb >0; lossN < loss0; reload err < tol. | `pueue` task 70, `logs/qwen_probe.log`, all probes pass |
+| R6: cold review cannot explain evidence under silent failure | External review findings fixed, then fresh-eyes subagent says PASS. | `docs/spec/20260426_code_review.md` |
+
+### Qwen proof table
+
+Command:
+
+```bash
+pueue add --immediate --follow --label "why: verify warning-free current Qwen probe after dtype API cleanup; resolve: same pass table proves current script" --working-directory "$PWD" --priority 1 -- just qwen-probe
+```
+
+Result from task 70:
+
+| variant | targets | trainable | id_err | perturb | loss0 | lossN | drop% | grad | dθ | reload | adapter |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| lora | 2 | 20480 | 0 | 0.375 | 5.25 | 3.131 | 40.36 | 1.432 | 4.262 | 0 | `outputs/qwen_train_probe/lora_adapter.pt` |
+| pissa | 2 | 20480 | 0.3125 | 0.75 | 5.25 | 3.629 | 30.88 | 6.124 | 4.381 | 0 | `outputs/qwen_train_probe/pissa_adapter.pt` |
+| delora | 2 | 20482 | 0.375 | 0.4062 | 5.246 | 5.166 | 1.537 | 0.04778 | 8.196 | 0 | `outputs/qwen_train_probe/delora_adapter.pt` |
+
+Failure-mode interpretation:
+
+- If targeting silently skipped, exact target-set assertion would fail before training.
+- If hooks were attached but dead, perturb delta would be 0.
+- If base params trained, the non-`lora_*` gradient check would fail.
+- If adapter grads were absent, `grad` or `dθ` would be 0/non-finite.
+- If save/load were broken, adapter tensor equality or reload logit error would fail.
+
 ## Review history
 
 A cold subagent review first returned `PASS_WITH_BLOCKERS`:
@@ -142,3 +195,6 @@ This repo is good enough for a first real experiment when:
 2. A 4bit or 8bit loaded model can train LoRA/DeLoRA params with nonzero gradients.
 3. Saved adapter tensors use full-path keys and reload without calibration data.
 4. Smoke tests distinguish target-skipping, hook identity drift, and missing-key load failure.
+
+see interesting adapters here https://github.com/wassname/adapters_as_hypotheses
+how peft handle 4bit here https://github.com/huggingface/peft/blob/6030f9160ed2fc17220f6f41382a66f1257b6a93/src/peft/tuners/lora/layer.py
