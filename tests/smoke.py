@@ -130,6 +130,7 @@ def variant_test(variant: str, dtype=torch.float32):
         "pissa": 5e-4,    # SVD recon in fp32 is tight; bf16 would be ~1e-2
         "delora": 1e-6,   # lambda0=0
         "ia3": 1e-6,
+        "dora": 5e-5,     # m * V/||V|| with V=W -> rounding in norm/divide
     }[variant] * max(1.0, base_scale)
     assert err < tol, f"  FAIL identity: err {err} > tol {tol}"
     print(f"  SHOULD: err<{tol:.1e}. PASS.")
@@ -169,6 +170,8 @@ def variant_test(variant: str, dtype=torch.float32):
     # delora has tightly-normalised updates; use Adam with higher lr to see signal in 20 steps
     if variant in ("delora", "ia3"):
         opt = torch.optim.Adam(trainable, lr=1e-1)
+    elif variant == "dora":
+        opt = torch.optim.Adam(trainable, lr=1e-3)  # m near ||W||_c, bigger lr blows up
     else:
         opt = torch.optim.SGD(trainable, lr=1e-2)
     losses = []
@@ -251,7 +254,7 @@ def main():
     parser.add_argument("--require-bnb", action="store_true")
     args = parser.parse_args()
 
-    for v in ("lora", "pissa", "delora", "ia3"):
+    for v in ("lora", "pissa", "delora", "ia3", "dora"):
         variant_test(v, dtype=torch.float32)
     structural_linear_like_test()
     bitsandbytes_cuda_smoke(args.require_bnb)

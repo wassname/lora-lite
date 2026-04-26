@@ -74,8 +74,8 @@ Activation-aware variants implement `group_init(model, targets, cfg, calibration
 
 | Variant | Fit to current runtime | Next invariant |
 |---|---|---|
-| IA3 | Done. Output gate `y * g`, identity at `g=1`. | Qwen proof task 79. |
-| DoRA | Likely additive hook for fp layers; quantized norm semantics need care. | fp identity, perturb, save/load, loss drop. |
+| IA3 | Done. Output gate `y * g`, identity at `g=1`. | Qwen proof in latest probe. |
+| DoRA | Done for fp layers. Reads dense `weight` to compute `||V||_c`; quantized layers fail fast. | Qwen proof in latest probe. |
 | SSVD / PiSSA-family | Fits weight-SVD init path. | reconstruction/identity invariant plus train proof. |
 | HRA / OFT / ROAD | Interesting, but weight-transform semantics need clearer hook-only formulation. | pseudocode first, then rotation/non-dead-code invariant. |
 | S-steer / AntiPaSTO | Should use `group_init` and activation evidence. | calibration consumed, hooks removed, load works without calibration. |

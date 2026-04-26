@@ -45,7 +45,7 @@ See [docs/spec/20260426_lora_lite_plan.md](docs/spec/20260426_lora_lite_plan.md)
 | PiSSA | yes, fp only | mutates `weight` into `W_res`; quantized PiSSA intentionally fails |
 | DeLoRA | yes | normalized additive adapter with learned scalar |
 | IA3 | yes | output gate initialized to ones |
-| DoRA | no | next small candidate |
+| DoRA | yes, fp only | reads dense `weight` for column-norm; quantized DoRA fails loudly |
 | SSVD / OFT / HRA / ROAD | no | planned after the hook-only invariant is clear |
 | S-steer / AntiPaSTO | no | should use data-calibrated `group_init`, not plain LoRA tests |
 

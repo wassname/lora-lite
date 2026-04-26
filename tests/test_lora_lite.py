@@ -111,7 +111,7 @@ def perturb_first_adapter(model: nn.Module) -> None:
     raise AssertionError("no perturbable adapter parameter found")
 
 
-@pytest.mark.parametrize("variant", ["lora", "pissa", "delora", "ia3"])
+@pytest.mark.parametrize("variant", ["lora", "pissa", "delora", "ia3", "dora"])
 def test_variant_identity_hook_save_load_and_training(variant: str):
     ARTIFACT_DIR.mkdir(exist_ok=True)
     torch.manual_seed(0)
@@ -129,7 +129,7 @@ def test_variant_identity_hook_save_load_and_training(variant: str):
     with torch.no_grad():
         y_init = model(ids).clone()
     identity_err = (y_init - y_base).abs().max().item()
-    identity_tol = {"lora": 1e-6, "pissa": 5e-4, "delora": 1e-6, "ia3": 1e-6}[variant]
+    identity_tol = {"lora": 1e-6, "pissa": 5e-4, "delora": 1e-6, "ia3": 1e-6, "dora": 5e-5}[variant]
     assert identity_err < identity_tol
 
     before_perturb = adapter_state(model)
@@ -162,7 +162,9 @@ def test_variant_identity_hook_save_load_and_training(variant: str):
     assert_only_lora_trainable(train_model)
     target = torch.randn(2, 16, 100) * 0.1
     trainable = [p for p in train_model.parameters() if p.requires_grad]
-    opt = torch.optim.Adam(trainable, lr=0.1) if variant in ("delora", "ia3") else torch.optim.SGD(trainable, lr=1e-2)
+    opt = torch.optim.Adam(trainable, lr=0.1) if variant in ("delora", "ia3") else (
+        torch.optim.Adam(trainable, lr=1e-3) if variant == "dora" else torch.optim.SGD(trainable, lr=1e-2)
+    )
     losses = []
     first_grad_norm = math.nan
     before_train = adapter_state(train_model)
@@ -247,7 +249,8 @@ def test_structural_non_linear_target_trains_for_forward_only_variants(variant: 
     assert adapter_grad_norm > 0
 
 
-def test_pissa_rejects_structural_non_linear_target():
-    cfg = ll.LoraLiteConfig(variant="pissa", r=2, alpha=2, dtype=torch.float32, target_roles=())
+@pytest.mark.parametrize("variant", ["pissa", "dora"])
+def test_weight_reading_variants_reject_structural_non_linear_target(variant: str):
+    cfg = ll.LoraLiteConfig(variant=variant, r=2, alpha=2, dtype=torch.float32, target_roles=())
     with pytest.raises(TypeError, match="plain nn.Linear"):
         ll.attach(FakeBnbModel(), cfg)

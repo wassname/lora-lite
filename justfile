@@ -26,6 +26,6 @@ qwen-queue variants="lora pissa delora ia3" steps="16":
 	#!/usr/bin/env bash
 	set -euo pipefail
 	pueue add \
-		-l "why: verify Qwen0.6B train/save-load proof for {{variants}} at {{steps}} steps; resolve: publish docs only if exact targets, lora-only grads, loss drop, reload pass" \
+		-l "why: verify Qwen0.6B train/save-load proof for {{variants}} at {{steps}} steps; resolve: publish only if exact targets, lora-only grads, loss drop, reload identity" \
 		-w "$PWD" -o 1 -- \
-		bash -lc 'uv run --extra test --extra hf-test python scripts/qwen_train_probe.py --variants {{variants}} --steps {{steps}}'
+		uv run --extra test --extra hf-test python scripts/qwen_train_probe.py --variants {{variants}} --steps {{steps}}

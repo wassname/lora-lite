@@ -173,7 +173,7 @@ def run_variant(args, variant: str, input_ids: torch.Tensor, labels: torch.Tenso
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="Qwen/Qwen3-0.6B")
-    parser.add_argument("--variants", nargs="+", default=["lora", "pissa", "delora", "ia3"])
+    parser.add_argument("--variants", nargs="+", default=["lora", "pissa", "delora", "ia3", "dora"])
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--torch-dtype", default="bfloat16")
     parser.add_argument("--steps", type=int, default=8)
