@@ -28,6 +28,7 @@ build = ["twine>=6"]
 test = ["pytest", "tabulate", "beartype>=0.18"]
 hf-test = ["accelerate>=1.6", "safetensors>=0.5", "transformers>=4.51"]
 bnb-test = ["bitsandbytes>=0.46"]
+benchmark = ["accelerate>=1.6", "datasets>=3.6", "safetensors>=0.5", "tabulate", "transformers>=4.51", "tyro>=0.9"]
 
 [build-system]
 requires = ["setuptools>=68"]

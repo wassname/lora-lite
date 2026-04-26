@@ -35,8 +35,19 @@ import torch
 from einops import einsum
 from jaxtyping import Float
 from torch import nn, Tensor as T
+from dataclasses import dataclass
 
 from ..variant import register, ParamSpec
+from ..config import AdapterConfig, register_config
+
+
+@register_config
+@dataclass
+class DeLoRAConfig(AdapterConfig):
+    variant: str = "delora"
+    # Initial scale for the per-layer learnable lambda. peft default is 15.0;
+    # we default to 0.0 (identity at t=0 even before B is zero-initialized).
+    lambda0: float = 0.0
 
 
 @register
@@ -45,7 +56,7 @@ class DeLoRA:
 
     @staticmethod
     def param_specs(d_in, d_out, cfg):
-        lam0 = float(cfg.variant_kwargs.get("lambda0", 0.0))
+        lam0 = float(cfg.lambda0)
         return {
             # peft DeLoRA default: A=kaiming, B=zeros (docs/refs/peft_delora_layer.py:138-140).
             # Identity at t=0 from B=0 -> delta=0 regardless of lambda. With B=0 the

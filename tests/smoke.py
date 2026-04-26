@@ -95,6 +95,19 @@ class FakeBnbModel(nn.Module):
         return self.layers[0](x)
 
 
+_CFG_BY_VARIANT = {
+    "lora": ll.LoRAConfig,
+    "pissa": ll.PiSSAConfig,
+    "delora": ll.DeLoRAConfig,
+    "ia3": ll.IA3Config,
+    "ia3_ff": ll.IA3FFConfig,
+    "dora": ll.DoRAConfig,
+    "hra": ll.HRAConfig,
+    "eva": ll.EVAConfig,
+    "antipasto": ll.AntiPaSTOConfig,
+}
+
+
 def variant_test(variant: str, dtype=torch.float32):
     print(f"\n=== variant={variant} dtype={dtype} ===")
     torch.manual_seed(0)
@@ -104,13 +117,14 @@ def variant_test(variant: str, dtype=torch.float32):
     with torch.no_grad():
         y_base = model(ids).clone()
 
-    cfg = ll.LoraLiteConfig(
-        variant=variant,
+    cfg_cls = _CFG_BY_VARIANT[variant]
+    extra = {"lambda0": 15.0} if variant == "delora" else {}
+    cfg = cfg_cls(
         r=4,
         alpha=4 if variant == "pissa" else 8,  # PiSSA needs scale==1 for clean recon
         dtype=dtype,
         # delora identity holds via B=0 init (peft semantics); use peft default lambda0=15.
-        variant_kwargs={"lambda0": 15.0} if variant == "delora" else {},
+        **extra,
     )
     handles = ll.attach(model, cfg)
     n_targets = len(handles)
@@ -164,9 +178,8 @@ def variant_test(variant: str, dtype=torch.float32):
     model = TinyModel().to(dtype)
     train_cfg = cfg
     if variant == "delora":
-        train_cfg = ll.LoraLiteConfig(
-            variant=cfg.variant, r=cfg.r, alpha=cfg.alpha, dtype=cfg.dtype,
-            variant_kwargs={"lambda0": 0.1},
+        train_cfg = ll.DeLoRAConfig(
+            r=cfg.r, alpha=cfg.alpha, dtype=cfg.dtype, lambda0=0.1,
         )
     ll.attach(model, train_cfg)
     target = torch.randn(2, 16, 100, dtype=dtype) * 0.1
@@ -200,7 +213,7 @@ def structural_linear_like_test():
     model = FakeBnbModel()
     x = torch.randn(2, 3, 8)
     y_base = model(x).detach()
-    ll.attach(model, ll.LoraLiteConfig(variant="lora", r=2, alpha=4, dtype=torch.float32, target_roles=()))
+    ll.attach(model, ll.LoRAConfig(r=2, alpha=4, dtype=torch.float32, target_roles=()))
     layer = model.layers[0]
     assert hasattr(layer, "lora_A") and hasattr(layer, "lora_B")
     y = model(x)
@@ -262,10 +275,12 @@ def bitsandbytes_cuda_smoke(require_bnb: bool):
             model = BnbModel(layer_cls)
             x = torch.randn(2, 3, 8, device="cuda")
             y_base = model(x).detach()
-            cfg = ll.LoraLiteConfig(
-                variant=variant, r=2, alpha=4, dtype=torch.float16, target_roles=(),
-                # In fp16 + bnb, peft default lambda0=15 + B=0 + clamp(min=1e-4) gives\n                # scale=lambda/(r*1e-4) ~ 75000 > fp16 max -> inf*0 = NaN. Use small\n                # lambda0 for the fp16 test.\n                variant_kwargs={"lambda0": 0.1} if variant == "delora" else {},
-            )
+            cfg_cls = _CFG_BY_VARIANT[variant]
+            extra = {"lambda0": 0.1} if variant == "delora" else {}
+            # In fp16 + bnb, peft default lambda0=15 + B=0 + clamp(min=1e-4) gives
+            # scale=lambda/(r*1e-4) ~ 75000 > fp16 max -> inf*0 = NaN. Use small
+            # lambda0 for the fp16 test.
+            cfg = cfg_cls(r=2, alpha=4, dtype=torch.float16, target_roles=(), **extra)
             ll.attach(model, cfg)
             y = model(x)
             err = (y.detach() - y_base).abs().max().item()
@@ -281,7 +296,7 @@ def bitsandbytes_cuda_smoke(require_bnb: bool):
 
         for variant in bnb_fail:
             model = BnbModel(layer_cls)
-            cfg = ll.LoraLiteConfig(variant=variant, r=2, alpha=2, dtype=torch.float16, target_roles=())
+            cfg = _CFG_BY_VARIANT[variant](r=2, alpha=2, dtype=torch.float16, target_roles=())
             try:
                 ll.attach(model, cfg)
             except (TypeError, RuntimeError, AttributeError, ValueError) as e:
@@ -300,7 +315,7 @@ def eva_smoke():
     with torch.no_grad():
         y_base = model(ids).clone()
 
-    cfg = ll.LoraLiteConfig(variant="eva", r=4, alpha=8, dtype=torch.float32)
+    cfg = ll.EVAConfig(r=4, alpha=8, dtype=torch.float32)
     # 4 calibration batches of random ids
     calib = [torch.randint(0, 100, (2, 16)) for _ in range(4)]
     ll.attach(model, cfg, calibration_data=calib)
@@ -380,7 +395,7 @@ def dora_bias_smoke():
             return self.layers[0](x)
 
     model = Wrap(layer)
-    cfg = ll.LoraLiteConfig(variant="dora", r=2, alpha=4, dtype=torch.float32, target_roles=())
+    cfg = ll.DoRAConfig(r=2, alpha=4, dtype=torch.float32, target_roles=())
     ll.attach(model, cfg)
     with torch.no_grad():
         y_adapt = model(x)
@@ -404,7 +419,7 @@ def hra_forward_order_smoke():
     layer = nn.Linear(d, d, bias=False)
     x = torch.randn(2, 3, d)
 
-    cfg = ll.LoraLiteConfig(variant="hra", r=4, alpha=4, dtype=torch.float32, target_roles=())
+    cfg = ll.HRAConfig(r=4, alpha=4, dtype=torch.float32, target_roles=())
     class Wrap(nn.Module):
         def __init__(self_, lin):
             super().__init__()

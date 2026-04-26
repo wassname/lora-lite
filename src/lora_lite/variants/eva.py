@@ -36,11 +36,19 @@ from einops import einsum
 from jaxtyping import Float
 from torch import nn, Tensor as T
 from typing import Iterable
+from dataclasses import dataclass
 
 from ..variant import register, ParamSpec
+from ..config import AdapterConfig, register_config
 
 CalibrationBatch = dict | tuple | list | T
 CalibrationData = Iterable[CalibrationBatch]
+
+
+@register_config
+@dataclass
+class EVAConfig(AdapterConfig):
+    variant: str = "eva"
 
 
 @register

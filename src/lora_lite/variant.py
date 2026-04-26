@@ -4,7 +4,7 @@ from typing import Callable, Protocol, Any
 import torch
 from torch import nn
 
-from .config import LoraLiteConfig
+from .config import AdapterConfig
 
 
 @dataclass
@@ -44,10 +44,10 @@ class Variant(Protocol):
     name: str
 
     @staticmethod
-    def param_specs(d_in: int, d_out: int, cfg: LoraLiteConfig) -> dict[str, ParamSpec]: ...
+    def param_specs(d_in: int, d_out: int, cfg: AdapterConfig) -> dict[str, ParamSpec]: ...
 
     @staticmethod
-    def init(layer: nn.Linear, cfg: LoraLiteConfig) -> None: ...
+    def init(layer: nn.Linear, cfg: AdapterConfig) -> None: ...
 
     @staticmethod
     def forward(layer: nn.Linear, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:

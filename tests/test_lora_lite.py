@@ -67,13 +67,28 @@ class FakeBnbModel(nn.Module):
         return self.layers[0](x)
 
 
-def cfg_for_variant(variant: str, *, training: bool = False) -> ll.LoraLiteConfig:
-    return ll.LoraLiteConfig(
-        variant=variant,
+_CFG_BY_VARIANT = {
+    "lora": ll.LoRAConfig,
+    "pissa": ll.PiSSAConfig,
+    "delora": ll.DeLoRAConfig,
+    "ia3": ll.IA3Config,
+    "ia3_ff": ll.IA3FFConfig,
+    "dora": ll.DoRAConfig,
+    "hra": ll.HRAConfig,
+    "eva": ll.EVAConfig,
+    "antipasto": ll.AntiPaSTOConfig,
+}
+
+
+def cfg_for_variant(variant: str, *, training: bool = False) -> ll.AdapterConfig:
+    # DeLoRA keeps identity via B=0, so nonzero lambda is needed for the
+    # perturb-output check to distinguish a live adapter from dead code.
+    extra = {"lambda0": 0.1} if variant == "delora" else {}
+    return _CFG_BY_VARIANT[variant](
         r=4,
         alpha=4 if variant == "pissa" else 8,
         dtype=torch.float32,
-        variant_kwargs={"lambda0": 0.1 if training else 0.0} if variant == "delora" else {},
+        **extra,
     )
 
 
@@ -93,25 +108,21 @@ def assert_no_base_grads(model: nn.Module) -> None:
 
 
 def perturb_first_adapter(model: nn.Module) -> None:
-    for name, p in model.named_parameters():
-        if "lora_lambda" in name:
+    """Nudge one trainable adapter parameter so forward output changes.
+
+    Priority order matters: with B=0 init (DeLoRA, EVA, LoRA), perturbing a
+    scalar gate or lambda alone keeps delta=0, so we hit a matrix entry first.
+    """
+    priority = ("lora_B", "lora_g", "lora_U", "lora_A", "lora_lambda", "lora_gate")
+    for key in priority:
+        for name, p in model.named_parameters():
+            if not p.requires_grad or key not in name:
+                continue
             with torch.no_grad():
-                p.add_(0.25)
-            return
-    for name, p in model.named_parameters():
-        if "lora_gate" in name:
-            with torch.no_grad():
-                p.add_(0.25)
-            return
-    for name, p in model.named_parameters():
-        if "lora_B" in name:
-            with torch.no_grad():
-                p.flatten()[0].add_(0.25)
-            return
-    for name, p in model.named_parameters():
-        if "lora_g" in name:
-            with torch.no_grad():
-                p.flatten()[0].add_(0.25)
+                if p.ndim == 0:
+                    p.add_(0.25)
+                else:
+                    p.flatten()[0].add_(0.25)
             return
     raise AssertionError("no perturbable adapter parameter found")
 
@@ -134,7 +145,7 @@ def test_variant_identity_hook_save_load_and_training(variant: str):
     with torch.no_grad():
         y_init = model(ids).clone()
     identity_err = (y_init - y_base).abs().max().item()
-    identity_tol = {"lora": 1e-6, "pissa": 5e-4, "delora": 1e-6, "ia3": 1e-6, "dora": 5e-5, "hra": 1e-6}[variant]
+    identity_tol = {"lora": 1e-6, "pissa": 5e-4, "delora": 1e-6, "ia3": 1e-6, "dora": 5e-5, "hra": 5e-6}[variant]
     assert identity_err < identity_tol
 
     before_perturb = adapter_state(model)
@@ -221,7 +232,7 @@ def test_load_fails_on_missing_and_unexpected_lora_keys():
 
 
 def test_no_target_layers_is_loud_failure():
-    cfg = ll.LoraLiteConfig(variant="lora", target_names=("definitely_missing",))
+    cfg = ll.LoRAConfig(target_names=("definitely_missing",))
     with pytest.raises(RuntimeError, match="no target layers"):
         ll.attach(TinyModel(), cfg)
 
@@ -232,16 +243,17 @@ def test_structural_non_linear_target_trains_for_forward_only_variants(variant: 
     model = FakeBnbModel()
     x = torch.randn(2, 3, 8)
     y_base = model(x).detach()
-    cfg = ll.LoraLiteConfig(
-        variant=variant,
+    extra = {"lambda0": 0.1} if variant == "delora" else {}
+    cfg = _CFG_BY_VARIANT[variant](
         r=2,
         alpha=4,
         dtype=torch.float32,
         target_roles=(),
-        variant_kwargs={"lambda0": 0.0} if variant == "delora" else {},
+        **extra,
     )
     ll.attach(model, cfg)
     y_init = model(x)
+    # delora: lambda0=0.1 is small but B=0 still makes delta=0 at t=0, so identity holds.
     assert (y_init.detach() - y_base).abs().max().item() < 1e-6
     loss = y_init.pow(2).mean()
     loss.backward()
@@ -256,6 +268,6 @@ def test_structural_non_linear_target_trains_for_forward_only_variants(variant: 
 
 @pytest.mark.parametrize("variant", ["pissa", "dora"])
 def test_weight_reading_variants_reject_structural_non_linear_target(variant: str):
-    cfg = ll.LoraLiteConfig(variant=variant, r=2, alpha=2, dtype=torch.float32, target_roles=())
+    cfg = _CFG_BY_VARIANT[variant](r=2, alpha=2, dtype=torch.float32, target_roles=())
     with pytest.raises(TypeError, match="plain nn.Linear"):
         ll.attach(FakeBnbModel(), cfg)

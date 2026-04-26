@@ -29,13 +29,15 @@ precision (fp32 SVD round-tripped to cfg.dtype).
 WHICH BASIS IS ROTATED:
   By default we rotate Vh (the INPUT singular basis). This is what AntiPaSTO3
   calls `rotate_V=True` in adapter terms (V == Vh.T columns). To rotate U
-  (output basis) instead, pass variant_kwargs={'rotate_basis': 'U'}.
+  (output basis) instead, pass `rotate_basis='U'` on the AntiPaSTOConfig.
   Rotating both is not implemented (one rotation is enough to span the
   identifiable steering directions; two is degenerate).
 
 REQUIRES even rank divisible by `block_size` (default 4). r=8, bs=4 -> 2 blocks.
 """
 import math
+from dataclasses import dataclass
+from typing import Literal
 
 import torch
 from einops import einsum
@@ -43,6 +45,19 @@ from jaxtyping import Float
 from torch import nn, Tensor as T
 
 from ..variant import register, ParamSpec
+from ..config import AdapterConfig, register_config
+
+
+@register_config
+@dataclass
+class AntiPaSTOConfig(AdapterConfig):
+    variant: str = "antipasto"
+    # Block size for the block-diagonal Cayley rotation. r must be divisible by it.
+    block_size: int = 4
+    # Cayley map saturation: bounds rotation angle to ~max_rotation_angle radians.
+    max_rotation_angle: float = 0.5
+    # Which singular basis to rotate: 'V' (input) or 'U' (output).
+    rotate_basis: Literal["V", "U"] = "V"
 
 
 def _cayley(skew: torch.Tensor) -> torch.Tensor:
@@ -81,7 +96,7 @@ class AntiPaSTO:
     @staticmethod
     def param_specs(d_in, d_out, cfg):
         r = cfg.r
-        bs = int(cfg.variant_kwargs.get("block_size", 4))
+        bs = int(cfg.block_size)
         if r % bs != 0:
             raise ValueError(f"AntiPaSTO requires r={r} divisible by block_size={bs}")
         n_blocks = r // bs
@@ -123,9 +138,9 @@ class AntiPaSTO:
         y: Float[T, '*B o'],
     ) -> Float[T, '*B o']:
         cfg = layer._lora_cfg
-        bs = int(cfg.variant_kwargs.get("block_size", 4))
-        max_angle = float(cfg.variant_kwargs.get("max_rotation_angle", 0.5))
-        rotate_basis = cfg.variant_kwargs.get("rotate_basis", "V")
+        bs = int(cfg.block_size)
+        max_angle = float(cfg.max_rotation_angle)
+        rotate_basis = cfg.rotate_basis
 
         U = layer.lora_U.to(x.dtype)                          # (d_out, r)
         S = layer.lora_S.to(x.dtype)                          # (r,)

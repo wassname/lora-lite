@@ -16,7 +16,7 @@ pip install -e git+https://github.com/wassname/lora-lite.git#egg=lora-lite
 import torch, lora_lite as ll
 
 model = MyTransformer()
-cfg = ll.LoraLiteConfig(variant="lora", r=8, alpha=16, dtype=torch.bfloat16)
+cfg = ll.LoRAConfig(r=8, alpha=16, dtype=torch.bfloat16)
 ll.attach(model, cfg)
 
 opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-4)
@@ -54,7 +54,8 @@ See [docs/spec/20260426_lora_lite_plan.md](docs/spec/20260426_lora_lite_plan.md)
 
 By default, `lora-lite` targets linear-like modules with `in_features`, `out_features`, and `weight`, excluding `lm_head` and `embed_tokens`.
 
-Useful `LoraLiteConfig` fields:
+Useful `AdapterConfig` fields (shared across all variants; subclasses add
+variant-specific knobs like `lambda0` on `DeLoRAConfig`):
 
 - `target_roles`: subset of `("reader", "writer", "inner")`; `()` means all.
 - `target_names`: regex includes.

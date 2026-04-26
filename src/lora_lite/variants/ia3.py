@@ -16,8 +16,8 @@ In both cases g is initialized to 1 -> identity at t=0.
 To match the paper exactly on a Llama/Qwen-style block requires TWO attach
 passes (one per variant), since each variant uses one hook type:
 
-    cfg_attn = LoraLiteConfig(variant="ia3",    target_names=(r"\\.k_proj$", r"\\.v_proj$"))
-    cfg_ffn  = LoraLiteConfig(variant="ia3_ff", target_names=(r"\\.down_proj$",))
+    cfg_attn = IA3Config(   target_names=(r"\\.k_proj$", r"\\.v_proj$"))
+    cfg_ffn  = IA3FFConfig( target_names=(r"\\.down_proj$",))
 
 Reference implementation:
   - peft IA3 layer (is_feedforward toggles input-vs-output gating, see
@@ -27,8 +27,22 @@ Reference implementation:
 import torch
 from jaxtyping import Float
 from torch import nn, Tensor as T
+from dataclasses import dataclass
 
 from ..variant import register, ParamSpec
+from ..config import AdapterConfig, register_config
+
+
+@register_config
+@dataclass
+class IA3Config(AdapterConfig):
+    variant: str = "ia3"
+
+
+@register_config
+@dataclass
+class IA3FFConfig(AdapterConfig):
+    variant: str = "ia3_ff"
 
 
 @register

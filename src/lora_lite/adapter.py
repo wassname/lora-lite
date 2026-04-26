@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.utils.hooks import RemovableHandle
 
-from .config import LoraLiteConfig
+from .config import AdapterConfig
 from .variant import REGISTRY
 from .target import find_targets
 
@@ -14,7 +14,7 @@ _ATTACHED_ATTR = "_lora_lite_attached"
 
 def _hook(layer, args, y):
     (x,) = args
-    cfg: LoraLiteConfig = layer._lora_cfg
+    cfg: AdapterConfig = layer._lora_cfg
     x_cast = x.to(cfg.dtype)
     out = layer._lora_variant.forward(layer, x_cast, y)
     return out.to(y.dtype)
@@ -22,13 +22,13 @@ def _hook(layer, args, y):
 
 def _pre_hook(layer, args):
     (x,) = args
-    cfg: LoraLiteConfig = layer._lora_cfg
+    cfg: AdapterConfig = layer._lora_cfg
     x_cast = x.to(cfg.dtype)
     x_new = layer._lora_variant.forward_input(layer, x_cast)
     return (x_new.to(x.dtype),)
 
 
-def attach(model: nn.Module, cfg: LoraLiteConfig, calibration_data=None, *, _skip_group_init: bool = False) -> list[RemovableHandle]:
+def attach(model: nn.Module, cfg: AdapterConfig, calibration_data=None, *, _skip_group_init: bool = False) -> list[RemovableHandle]:
     if cfg.variant not in REGISTRY:
         raise KeyError(f"unknown variant {cfg.variant!r}; registered: {list(REGISTRY)}")
     variant = REGISTRY[cfg.variant]
@@ -131,7 +131,7 @@ def save(model: nn.Module, path: str) -> None:
 
 def load(model: nn.Module, path: str) -> list[RemovableHandle]:
     blob = torch.load(path, weights_only=True, map_location="cpu")
-    cfg = LoraLiteConfig.from_dict(blob["cfg"])
+    cfg = AdapterConfig.from_dict(blob["cfg"])
     handles = attach(model, cfg, _skip_group_init=True)  # creates empty params; data-driven inits restored from state_dict
     missing, unexpected = model.load_state_dict(blob["state"], strict=False)
     expected_lora = {k for k in model.state_dict() if "lora_" in k}

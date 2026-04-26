@@ -32,8 +32,16 @@ import torch
 from einops import einsum
 from jaxtyping import Float
 from torch import nn, Tensor as T
+from dataclasses import dataclass
 
 from ..variant import register, ParamSpec
+from ..config import AdapterConfig, register_config
+
+
+@register_config
+@dataclass
+class HRAConfig(AdapterConfig):
+    variant: str = "hra"
 
 
 @register
