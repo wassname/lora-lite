@@ -10,7 +10,8 @@ Reference implementations (for review/cross-check):
     (see docs/refs/peft_lora_layer.py for offline copy)
 """
 from einops import einsum
-from torch import nn
+from jaxtyping import Float
+from torch import nn, Tensor as T
 import torch
 
 from ..variant import register, ParamSpec
@@ -28,12 +29,16 @@ class LoRA:
         }
 
     @staticmethod
-    def init(layer: nn.Linear, cfg) -> None:
+    def init(layer: nn.Module, cfg) -> None:
         # B is zeros => delta=0 at t=0; identity invariant holds.
         return
 
     @staticmethod
-    def forward(layer: nn.Linear, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def forward(
+        layer: nn.Module,
+        x: Float[T, '*B i'],
+        y: Float[T, '*B o'],
+    ) -> Float[T, '*B o']:
         cfg = layer._lora_cfg
         scale = cfg.alpha / cfg.r
         h = einsum(x, layer.lora_A, "... i, r i -> ... r")

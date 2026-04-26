@@ -33,7 +33,8 @@ Reference implementations:
 """
 import torch
 from einops import einsum
-from torch import nn
+from jaxtyping import Float
+from torch import nn, Tensor as T
 
 from ..variant import register, ParamSpec
 
@@ -57,7 +58,7 @@ class DeLoRA:
         }
 
     @staticmethod
-    def init(layer: nn.Linear, cfg) -> None:
+    def init(layer: nn.Module, cfg) -> None:
         # Reading layer.weight only works for plain Linear; for bnb layers this
         # dequantizes via .float() round-trip if available, or fails cleanly.
         with torch.no_grad():
@@ -67,7 +68,11 @@ class DeLoRA:
         return
 
     @staticmethod
-    def forward(layer: nn.Linear, x, y):
+    def forward(
+        layer: nn.Module,
+        x: Float[T, '*B i'],
+        y: Float[T, '*B o'],
+    ) -> Float[T, '*B o']:
         cfg = layer._lora_cfg
         A = layer.lora_A                                   # (r, d_in)
         B = layer.lora_B                                   # (d_out, r)

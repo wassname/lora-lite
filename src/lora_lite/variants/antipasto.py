@@ -34,12 +34,12 @@ WHICH BASIS IS ROTATED:
 
 REQUIRES even rank divisible by `block_size` (default 4). r=8, bs=4 -> 2 blocks.
 """
-from __future__ import annotations
 import math
 
 import torch
 from einops import einsum
-from torch import nn
+from jaxtyping import Float
+from torch import nn, Tensor as T
 
 from ..variant import register, ParamSpec
 
@@ -96,7 +96,7 @@ class AntiPaSTO:
         }
 
     @staticmethod
-    def init(layer: nn.Linear, cfg) -> None:
+    def init(layer: nn.Module, cfg) -> None:
         if type(layer) is not nn.Linear:
             raise TypeError(
                 "AntiPaSTO mutates layer.weight into W_res (like PiSSA), so v1 "
@@ -116,7 +116,11 @@ class AntiPaSTO:
             layer.weight.data.copy_(W_res)
 
     @staticmethod
-    def forward(layer: nn.Linear, x, y):
+    def forward(
+        layer: nn.Module,
+        x: Float[T, '*B i'],
+        y: Float[T, '*B o'],
+    ) -> Float[T, '*B o']:
         cfg = layer._lora_cfg
         bs = int(cfg.variant_kwargs.get("block_size", 4))
         max_angle = float(cfg.variant_kwargs.get("max_rotation_angle", 0.5))

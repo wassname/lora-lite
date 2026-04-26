@@ -1,17 +1,19 @@
 from dataclasses import dataclass, field, asdict
-from typing import Any
+from typing import Any, Literal
 import torch
+
+Role = Literal["reader", "writer", "inner"]
 
 
 @dataclass
 class LoraLiteConfig:
     variant: str = "lora"
     r: int = 8
-    alpha: float = 16.0
+    alpha: float | int = 16.0
     dtype: torch.dtype = torch.bfloat16
 
     # targeting
-    target_roles: tuple[str, ...] = ("reader", "writer")
+    target_roles: tuple[Role, ...] = ("reader", "writer")
     target_names: tuple[str, ...] = ()
     exclude_names: tuple[str, ...] = ("lm_head", "embed_tokens")
     layers: tuple[int, ...] | None = None
@@ -26,12 +28,9 @@ class LoraLiteConfig:
 
     @classmethod
     def from_dict(cls, d: dict) -> "LoraLiteConfig":
+        # to_dict always serializes dtype as str; torch.save preserves tuples.
+        # If you build the dict by hand, pass the right types -- fail loud otherwise.
         d = dict(d)
-        if isinstance(d.get("dtype"), str):
-            d["dtype"] = getattr(torch, d["dtype"])
-        if isinstance(d.get("layers"), list):
-            d["layers"] = tuple(d["layers"])
-        for k in ("target_roles", "target_names", "exclude_names"):
-            if isinstance(d.get(k), list):
-                d[k] = tuple(d[k])
+        d["dtype"] = getattr(torch, d["dtype"])
         return cls(**d)
+

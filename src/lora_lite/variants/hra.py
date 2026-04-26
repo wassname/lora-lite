@@ -30,7 +30,8 @@ Reference implementations (for review/cross-check):
 """
 import torch
 from einops import einsum
-from torch import nn
+from jaxtyping import Float
+from torch import nn, Tensor as T
 
 from ..variant import register, ParamSpec
 
@@ -53,7 +54,7 @@ class HRA:
         }
 
     @staticmethod
-    def init(layer: nn.Linear, cfg) -> None:
+    def init(layer: nn.Module, cfg) -> None:
         # Symmetric init per peft (docs/refs/peft_hra_layer.py:101-108):
         #   half = kaiming(r//2, d_in); U = repeat_interleave(half, 2, dim=0)
         # Adjacent pairs (H_2k H_2k+1) cancel since H^2 = I, so R = I exactly,
@@ -66,7 +67,10 @@ class HRA:
         return
 
     @staticmethod
-    def forward_input(layer: nn.Linear, x: torch.Tensor) -> torch.Tensor:
+    def forward_input(
+        layer: nn.Module,
+        x: Float[T, '*B i'],
+    ) -> Float[T, '*B i']:
         """Apply Rx where R = prod_i H_i, H_i = I - 2 u_i u_i^T / ||u_i||^2."""
         U = layer.lora_U                                     # (r, d_in)
         Rx = x

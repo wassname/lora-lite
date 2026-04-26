@@ -7,6 +7,7 @@ requires-python = ">=3.10"
 dependencies = [
     "torch>=2.1",
     "einops>=0.7",
+    "jaxtyping>=0.2.34",
 ]
 keywords = ["lora", "pytorch", "peft", "adapters", "llm"]
 classifiers = [
@@ -24,7 +25,7 @@ Issues = "https://github.com/wassname/lora-lite/issues"
 
 [project.optional-dependencies]
 build = ["twine>=6"]
-test = ["pytest", "tabulate"]
+test = ["pytest", "tabulate", "beartype>=0.18"]
 hf-test = ["accelerate>=1.6", "safetensors>=0.5", "transformers>=4.51"]
 bnb-test = ["bitsandbytes>=0.46"]
 

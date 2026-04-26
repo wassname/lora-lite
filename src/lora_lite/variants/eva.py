@@ -31,13 +31,16 @@ References:
     https://github.com/huggingface/peft/blob/main/examples/eva_finetuning/eva_finetuning.py
     (offline: docs/refs/peft_eva_finetuning.py)
 """
-from __future__ import annotations
-
 import torch
 from einops import einsum
-from torch import nn
+from jaxtyping import Float
+from torch import nn, Tensor as T
+from typing import Iterable
 
 from ..variant import register, ParamSpec
+
+CalibrationBatch = dict | tuple | list | T
+CalibrationData = Iterable[CalibrationBatch]
 
 
 @register
@@ -55,12 +58,12 @@ class EVA:
         }
 
     @staticmethod
-    def init(layer: nn.Linear, cfg) -> None:
+    def init(layer: nn.Module, cfg) -> None:
         # No-op; group_init does the data-driven SVD across all targets at once.
         return
 
     @staticmethod
-    def group_init(model: nn.Module, targets, cfg, calibration_data) -> None:
+    def group_init(model: nn.Module, targets, cfg, calibration_data: CalibrationData | None) -> None:
         # adapter.load() passes _skip_group_init=True so this is only called on
         # the live attach path where calibration_data is required.
         if calibration_data is None:
@@ -72,7 +75,7 @@ class EVA:
             )
         # Collect input activations per target via forward hooks.
         layers = {name: layer for name, layer, _ in targets}
-        captured: dict[str, list[torch.Tensor]] = {n: [] for n in layers}
+        captured: dict[str, list[T]] = {n: [] for n in layers}
 
         def make_hook(name):
             def _h(module, args, kwargs):
@@ -115,7 +118,11 @@ class EVA:
             layer.lora_A.copy_(A)
 
     @staticmethod
-    def forward(layer: nn.Linear, x, y):
+    def forward(
+        layer: nn.Module,
+        x: Float[T, '*B i'],
+        y: Float[T, '*B o'],
+    ) -> Float[T, '*B o']:
         cfg = layer._lora_cfg
         scale = cfg.alpha / cfg.r
         h = einsum(x, layer.lora_A, "... i, r i -> ... r")

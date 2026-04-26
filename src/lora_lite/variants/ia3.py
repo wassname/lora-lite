@@ -25,7 +25,8 @@ Reference implementation:
     https://github.com/huggingface/peft/blob/main/src/peft/tuners/ia3/layer.py
 """
 import torch
-from torch import nn
+from jaxtyping import Float
+from torch import nn, Tensor as T
 
 from ..variant import register, ParamSpec
 
@@ -39,11 +40,15 @@ class IA3:
         return {"lora_g": ParamSpec((d_out,), init="ones", trainable=True)}
 
     @staticmethod
-    def init(layer: nn.Linear, cfg) -> None:
+    def init(layer: nn.Module, cfg) -> None:
         return
 
     @staticmethod
-    def forward(layer: nn.Linear, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def forward(
+        layer: nn.Module,
+        x: Float[T, '*B i'],
+        y: Float[T, '*B o'],
+    ) -> Float[T, '*B o']:
         return y * layer.lora_g
 
 
@@ -56,9 +61,12 @@ class IA3FF:
         return {"lora_g": ParamSpec((d_in,), init="ones", trainable=True)}
 
     @staticmethod
-    def init(layer: nn.Linear, cfg) -> None:
+    def init(layer: nn.Module, cfg) -> None:
         return
 
     @staticmethod
-    def forward_input(layer: nn.Linear, x: torch.Tensor) -> torch.Tensor:
+    def forward_input(
+        layer: nn.Module,
+        x: Float[T, '*B i'],
+    ) -> Float[T, '*B i']:
         return x * layer.lora_g

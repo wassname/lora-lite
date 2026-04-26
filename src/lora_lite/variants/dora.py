@@ -19,9 +19,9 @@ Reference implementations (for review/cross-check):
     (offline: docs/refs/peft_lora_dora.py)
 """
 import torch
-import torch.nn.functional as F
 from einops import einsum
-from torch import nn
+from jaxtyping import Float
+from torch import nn, Tensor as T
 
 from ..variant import register, ParamSpec
 
@@ -40,7 +40,7 @@ class DoRA:
         }
 
     @staticmethod
-    def init(layer: nn.Linear, cfg) -> None:
+    def init(layer: nn.Module, cfg) -> None:
         if type(layer) is not nn.Linear:
             raise TypeError(
                 "DoRA needs ||W||_c, so v1 only supports plain nn.Linear. "
@@ -52,7 +52,11 @@ class DoRA:
             layer.lora_m.data.copy_(col_norm)
 
     @staticmethod
-    def forward(layer: nn.Linear, x, y):
+    def forward(
+        layer: nn.Module,
+        x: Float[T, '*B i'],
+        y: Float[T, '*B o'],
+    ) -> Float[T, '*B o']:
         cfg = layer._lora_cfg
         scale = cfg.alpha / cfg.r
         # V = W + scale * B @ A

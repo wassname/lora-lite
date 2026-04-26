@@ -22,7 +22,8 @@ Reference implementations (for review/cross-check):
 """
 import torch
 from einops import einsum
-from torch import nn
+from jaxtyping import Float
+from torch import nn, Tensor as T
 
 from ..variant import register, ParamSpec
 
@@ -39,7 +40,7 @@ class PiSSA:
         }
 
     @staticmethod
-    def init(layer: nn.Linear, cfg) -> None:
+    def init(layer: nn.Module, cfg) -> None:
         if type(layer) is not nn.Linear:
             raise TypeError(
                 "PiSSA mutates layer.weight into W_res, so v1 only supports plain nn.Linear. "
@@ -63,7 +64,11 @@ class PiSSA:
         layer.weight.data.copy_((W - scale * BA).to(layer.weight.dtype))
 
     @staticmethod
-    def forward(layer: nn.Linear, x, y):
+    def forward(
+        layer: nn.Module,
+        x: Float[T, '*B i'],
+        y: Float[T, '*B o'],
+    ) -> Float[T, '*B o']:
         cfg = layer._lora_cfg
         scale = cfg.alpha / cfg.r
         h = einsum(x, layer.lora_A, "... i, r i -> ... r")
