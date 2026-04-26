@@ -37,6 +37,7 @@ The core bet is that adapter variants should own the relationship between `(x, l
 | PiSSA | done, fp-only | `src/lora_lite/variants/pissa.py` |
 | DeLoRA | done | `src/lora_lite/variants/delora.py` |
 | IA3 | done | `src/lora_lite/variants/ia3.py` |
+| DoRA | done, fp-only | `src/lora_lite/variants/dora.py` |
 | Smoke tests | done | `tests/smoke.py` |
 | bnb minimal forward smoke | done | `Linear8bitLt` and `Linear4bit` pass on CUDA with `just bnb-smoke` |
 
@@ -54,6 +55,8 @@ Last verified log: `/home/wassname/.cache/agent-tmp/lora_lite_smoke_after_review
 | DeLoRA loss drop | `93.4%` |
 | IA3 identity | `0.000e+00` |
 | IA3 loss drop | `88.7%` |
+| DoRA identity | `0.000e+00` |
+| DoRA loss drop | `63.3%` |
 | fake non-`nn.Linear` target | attaches, identity `0.000e+00`, grad nonzero |
 | bnb `Linear8bitLt` | identity `0.000e+00`, grad nonzero |
 | bnb `Linear4bit` | identity `0.000e+00`, grad nonzero |
@@ -104,6 +107,16 @@ Result from task 70:
 | pissa | 2 | 20480 | 0.3125 | 0.75 | 5.25 | 3.629 | 30.88 | 6.124 | 4.381 | 0 | `outputs/qwen_train_probe/pissa_adapter.pt` |
 | delora | 2 | 20482 | 0.375 | 0.4062 | 5.246 | 5.166 | 1.537 | 0.04778 | 8.196 | 0 | `outputs/qwen_train_probe/delora_adapter.pt` |
 
+Follow-up tasks 80 (lora/pissa/delora/ia3 at 16 steps) and 81 (dora at 16 steps) extend the table:
+
+| variant | targets | trainable | id_err | perturb | loss0 | lossN | drop% | grad | dθ | reload | adapter |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| lora | 2 | 20480 | 0 | 0.375 | 5.25 | 2.432 | 53.68 | 1.467 | 6.403 | 0 | `outputs/qwen_train_probe/lora_adapter.pt` |
+| pissa | 2 | 20480 | 0.3125 | 0.75 | 5.25 | 2.958 | 43.66 | 6.124 | 5.909 | 0 | `outputs/qwen_train_probe/pissa_adapter.pt` |
+| delora | 2 | 20482 | 0.3281 | 0.3125 | 5.261 | 4.823 | 8.322 | 0.06303 | 15.1 | 0 | `outputs/qwen_train_probe/delora_adapter.pt` |
+| ia3 | 2 | 3072 | 0 | 0.375 | 5.25 | 4.473 | 14.79 | 0.463 | 5.926 | 0 | `outputs/qwen_train_probe/ia3_adapter.pt` |
+| dora | 2 | 23552 | 0 | 0.3203 | 5.25 | 2.439 | 53.54 | 1.776 | 7.44 | 0 | `outputs/qwen_train_probe/dora_adapter.pt` |
+
 Failure-mode interpretation:
 
 - If targeting silently skipped, exact target-set assertion would fail before training.
@@ -152,8 +165,8 @@ Follow-up after omega correction:
 
 | Variant | Why it fits or waits | Next check |
 |---|---|---|
-| IA3 | Implemented. Multiplicative output vector, no base-weight mutation. | `just test` -> 10 tests passed; `just smoke` -> identity/save-load/loss drop passed. Qwen task 79 queued. |
-| DoRA | Fits additive hook for fp layers; bnb norm handling must be explicit or fail-fast. | fp smoke first; quantized proof only after norm semantics are obvious. |
+| IA3 | Implemented. Multiplicative output vector, no base-weight mutation. | `just test` -> 12 tests passed; smoke/Qwen task 80 pass. |
+| DoRA | Implemented for fp layers. Reads dense `weight` to compute `||V||_c`; bnb layers fail loudly. | smoke and Qwen task 81 pass with id_err=0, drop=53.5%, reload=0. |
 | SSVD / PiSSA-family | Fits current `weight`-SVD pattern and teaches the SVD adapter path. | Reconstruction/identity invariant plus train proof. |
 | HRA / OFT / ROAD | Interesting, but likely wants orthogonal or weight-transform semantics. Keep until hook-only formulation is clear. | Pseudocode first, then one invariant that distinguishes real rotation from dead code. |
 | S-steer / AntiPaSTO | Research adapters. Should use `group_init` and activation evidence, not be squeezed into plain LoRA tests. | Calibration is consumed, hooks removed, load does not need calibration data. |
@@ -182,9 +195,9 @@ Second cold review verdict: `PASS` for the minimal 4bit-enabled scope.
 
 ### Next implementation goals
 
-- [ ] Add DoRA.
-  - Verify: fp32/bf16 identity at init, finite gradients, and smoke loss drop.
-  - Caveat: bnb DoRA needs explicit weight dequantization for norm computation or should be fp-only at first.
+- [x] Add DoRA.
+  - Verified: fp32 identity 0.000e+00, finite gradients, smoke drop 63.3%, Qwen-0.6B task 81 drop 53.5% reload 0.
+  - Caveat: bnb DoRA fails fast in `init` (needs dense `weight` for `||V||_c`).
 
 - [ ] Add VeRA.
   - Verify: shared buffers are allocated once, target slices match shape, identity or near-identity at init.
