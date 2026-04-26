@@ -57,10 +57,11 @@ class DoRA:
     ) -> Float[T, '*B o']:
         cfg = layer._lora_cfg
         scale = cfg.alpha / cfg.r
-        # V = W + scale * B @ A
+        # Paper §4.3: treat ||V+ΔV||_c as a constant (detach from grad graph) for
+        # stability and ~2x lower memory. Match peft (lora_weight.detach + weight_norm.detach).
         BA = einsum(layer.lora_B, layer.lora_A, "o r, r i -> o i")
-        V = layer.weight + scale * BA                          # (d_out, d_in)
-        v_norm = V.norm(dim=1).clamp_min(1e-12)                # (d_out,)
+        V = layer.weight + scale * BA.detach()                 # (d_out, d_in)
+        v_norm = V.norm(dim=1).clamp_min(1e-12).detach()       # (d_out,)
         # Bias passes through unscaled (matches peft).
         bias = getattr(layer, "bias", None)
         wx = y if bias is None else (y - bias)

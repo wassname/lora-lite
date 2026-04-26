@@ -13,7 +13,7 @@ Refs:
     (offline: docs/refs/peft_eva.py; example: docs/refs/peft_eva_finetuning.py)
 """
 import torch
-from einops import einsum
+from einops import einsum, rearrange
 from jaxtyping import Float
 from torch import nn, Tensor as T
 from typing import Iterable
@@ -68,7 +68,7 @@ class EVA:
             def _h(module, args, kwargs):
                 # signature: pre-forward, args[0] is the input tensor
                 x = args[0].detach()
-                captured[name].append(x.reshape(-1, x.shape[-1]).to(torch.float32).cpu())
+                captured[name].append(rearrange(x, "... d -> (...) d").to(torch.float32).cpu())
             return _h
 
         handles = [

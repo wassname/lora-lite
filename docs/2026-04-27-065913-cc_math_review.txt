@@ -1,0 +1,754 @@
+
+❯ yes make a task to deep review each one against how it's implemented. so one  
+  task for each. please give me the pseudocode of 1) reference code 2)          
+  reference paper 3) ours and compare.                                          
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+● 1. LoRA review
+
+  Paper (Hu et al. 2021):
+  forward:
+    h = W·x + (α/r) · B·A·x       # B∈R^{d×r}, A∈R^{r×d}
+  init:
+    A ~ Gaussian (or kaiming),  B = 0
+
+  peft peft_lora_layer.py:941-969:
+  forward(x):
+    result = base_layer(x)                                # W·x + bias
+    for adapter in active_adapters:
+        result += lora_B(lora_A(dropout(x))) * scaling    # scaling = α/r or
+  α/√r if rslora
+  init (reset_lora_parameters, line 263):
+    kaiming_uniform_(lora_A, a=√5);  zeros_(lora_B)
+
+  ours src/lora_lite/variants/lora.py:
+  param_specs:
+    lora_A: (r, d_in)  init=kaiming
+    lora_B: (d_out, r) init=zeros
+  forward(x, y):                # y = base_layer(x) already computed by host
+    scale = α/r
+    h = einsum(x, A, "... i, r i -> ... r")
+    delta = einsum(h, B, "... r, o r -> ... o")
+    return y + scale·delta
+
+  Diff vs peft:
+  - ✓ math identical: scale·B·A·x + y
+  - ✗ no dropout (peft has lora_dropout)
+  - ✗ no rslora (α/√r)
+  - ✗ no init_lora_weights="gaussian" option (only kaiming)
+  - ✓ B=0 zero-init → identity at t=0
+
+  Verdict: correct vanilla LoRA. Missing dropout and rslora are deliberate scope
+   cuts (not bugs). No fix needed.
+
+  Read 1 file (ctrl+o to expand)
+
+● 2. DoRA review
+
+  Paper (Liu et al. 2024, §4.1, §4.3):
+  W' = m · V/||V||_c,    V = W + ΔV = W + (α/r)·B·A     # ||·||_c = per-row L2
+  init:  m = ||W||_c,  B = 0     →  W' = W
+  §4.3 trick: treat ||V+ΔV||_c as a CONSTANT (detach from grad graph)
+              for stability + speed.
+
+  peft peft_lora_dora.py:132-166:
+  forward(x):
+    lora_W = B·A
+    weight_norm = ||W + α/r·lora_W.detach()||_c        # << DETACHED
+    weight_norm = weight_norm.detach()                  # << belt+braces
+    mag_norm_scale = (m / weight_norm)
+    base_result = W·x        (or passed in, minus bias)
+    return (mag_norm_scale - 1)·base_result + mag_norm_scale · α/r · B·A·x
+                                                        # bias re-added outside
+
+  ours src/lora_lite/variants/dora.py:53-71:
+  V = W + scale·B·A                                     # << NOT detached
+  v_norm = V.norm(dim=1).clamp_min(1e-12)               # << NOT detached
+  wx = y - bias  if bias else y
+  delta_lora = scale · B·A·x
+  combined = wx + delta_lora
+  out = (m / v_norm) · combined
+  return out + bias  if bias else out
+
+  Diff vs peft:
+  - ✗ Bug: missing .detach() on the lora term inside weight_norm. Paper §4.3
+  explicitly says to detach; peft detaches twice (line 144 lora_weight.detach()
+  and line 152 weight_norm.detach()). Without it, grads flow through the norm
+  denominator → unstable training and ~2× memory, the exact thing the paper
+  warns against.
+  - ✓ math otherwise equivalent: (m/||V||)·(Wx + α/r·BAx) = (m/||V||-1)·Wx + 
+  (m/||V||)·α/r·BAx + Wx. Both forms produce same output.
+  - ✓ bias handling matches peft (subtract before scaling, add after).
+  - ✓ m init ||W||_c matches.
+  - = nn.Linear-only restriction is a deliberate scope cut (peft handles bnb via
+   dequantize_module_weight).
+
+  Recommended fix: add .detach() to V (or equivalently v_norm.detach()) before
+  dividing.
+
+  V = layer.weight + scale * BA.detach()
+  v_norm = V.norm(dim=1).clamp_min(1e-12).detach()
+
+  Read 2 files (ctrl+o to expand)
+
+● 3. PiSSA review
+
+  Paper (Meng et al. 2024):
+  W = U S V^T   (truncated to top-r)
+  A = √S · V^T,    B = U · √S        →  B·A = U S V^T
+  W_res = W - B·A
+  forward: W_res·x + (α/r)·B·A·x      → at t=0 equals W·x
+
+  peft peft_lora_layer.py:360-393:
+  V, S, Uh = svd(W)                          # V is left, Uh is right (peft
+  naming)
+  Sr = S[:r] / scaling                        # << pre-divide by α/r
+  A = diag(√Sr) @ Uh[:r]                      # absorbs 1/√scaling
+  B = V[:, :r] @ diag(√Sr)                    # absorbs 1/√scaling
+  W_res = W - scaling · B·A                   # net: W - V[:,:r]·S[:r]·Uh[:r]
+  (scaling cancels)
+  forward: W_res·x + scaling·B·A·x
+
+  ours src/lora_lite/variants/pissa.py:45-76:
+  U, S, Vh = svd(W)
+  B = U[:,:r] · √S[:r]                        # NO scaling pre-division
+  A = √S[:r] · Vh[:r]                         # NO scaling pre-division
+  W_res = W - scale · B·A                     # = W - scale · U·S·Vh   (NOT
+  exactly W - U·S·Vh)
+  forward: W_res·x + scale · B·A·x            # net: W·x at t=0  ✓
+
+  Diff vs peft:
+  - ✓ Bit-identity at t=0 holds for any α (algebra cancels symmetrically): both
+  peft and ours satisfy W_res + scale·BA = W round-tripped.
+  - ⚠ A/B starting magnitudes differ when α≠r. peft pre-divides S/scale so
+  ||B||,||A|| ∝ √(S/scale); ours has ||B||,||A|| ∝ √S. Update dynamics (α/r · 
+  ΔB·A) therefore differ by a factor of √scale per matrix. For α=r (scale=1)
+  they're identical — and the docstring already says "Pass alpha=r for
+  paper-faithful scale=1".
+  - ✓ Linear-only restriction is a deliberate scope cut.
+  - ✓ cfg.dtype cast on A,B before storage matches peft's to(dtype) after save.
+  - ✓ fp32 SVD then (W - scale·BA) in fp32 before bf16 cast — comment "fp32
+  subtraction so W_res stays accurate" is honoured. peft does same via
+  weight.to(torch.float32).
+
+  Verdict: correct for α = r. For α ≠ r, behaves differently from peft (still
+  mathematically valid PiSSA, just different parameter scaling of A/B). Either
+  fix (apply Sr /= scale like peft) or tighten the docstring to "α=r required"
+  and assert it. Mild fix; not a correctness bug.
+
+  Read 1 file (ctrl+o to expand)
+
+● 4. DeLoRA review
+
+  Paper (Bini et al. 2025, ICLR'25):
+  W' = W + (λ/r) · B · Ξ · A,    Ξ_ii = 1/(||b_i|| · ||a_i||)
+  init: B=0  →  ΔW=0
+  default λ=15
+  Crucial: w_norm is per-input-channel ||W||_2 (col-norm), captured ONCE at init
+           (frozen reference) — not Frobenius scalar.
+
+  peft peft_delora_layer.py:226-264:
+  forward(x):
+    h = (x * w_norm) @ A.T                           # broadcast w_norm over
+  input dim
+    An = clamp(A.norm(dim=1), 1e-4)
+    Bn = clamp(B.norm(dim=0), 1e-4)
+    scale_r = (λ/r) / (An * Bn)                      # (r,)
+    h = h * scale_r
+    h = h @ B.T
+    return base_out + h
+  init:  A ← kaiming(√5),  B ← 0,  λ ← 15.0,  w_norm ← ||W||_2 col (frozen
+  buffer)
+
+  ours src/lora_lite/variants/delora.py:55-81:
+  forward(x, y):
+    x_scaled = x * lora_wnorm
+    h = einsum(x_scaled, A, "... i, r i -> ... r")       # = (x * w_norm) @ A.T
+    An = clamp(A.norm(dim=1), 1e-4)
+    Bn = clamp(B.norm(dim=0), 1e-4)
+    scale_r = (λ/r) / (An * Bn)
+    h = h * scale_r
+    delta = einsum(h, B, "... r, o r -> ... o")          # = h @ B.T
+    return y + delta
+  init:  A ← kaiming(√5),  B ← 0,  λ ← lambda0 (default 0.0, NOT 15.0),
+         lora_wnorm ← ||W||_2 col (frozen buffer)
+
+  Diff vs peft:
+  - ✓ math line-for-line identical: same dim-0 col-norm, same per-rank A/B
+  normalization, same gradient path (norms not detached, A,B receive gradient
+  through them — matches peft exactly).
+  - ✓ frozen lora_wnorm buffer (peft uses BufferDict, ours uses as_buffer=True).
+  - ⚠ default lambda0=0.0 differs from peft's 15.0. Docstring is honest about
+  this ("0.0 = bit-identity at t=0, but A,B get zero grad until lambda moves").
+  At λ=0, gradients on A,B vanish since delta ∝ λ, so training stalls until λ
+  moves off zero. This is documented but is a sharp foot-gun. peft's 15.0
+  default avoids it.
+  - ✓ even-r restriction not relevant here (HRA only).
+  - ✓ nn.Linear-only restriction documented.
+
+  Verdict: correct. The lambda0 default is a deliberate "bit-identity but
+  stalls" choice — keep, but consider noting in docstring that for actual
+  training you'd want λ0≈1-15 (paper uses 15).
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● 5. EVA review
+
+  Paper (Paischer et al. 2024):
+  For each target layer l:
+    Collect inputs x ∈ R^{N × d_in} on calibration batches
+    Vh = right_singular_vectors(x)                  # top-r principal input dirs
+    A_l ← Vh[:r]                                    # data-driven init
+    B_l ← 0
+  forward = standard LoRA
+  Optional: rank redistribution by explained variance (ρ-budget across layers)
+  Optional: hash-dedup layers with identical inputs (Q/K/V share x)
+
+  peft peft_eva.py:
+  For each calibration batch:
+    IncrementalPCA.partial_fit(layer_input)         # streaming,
+  memory-efficient
+    Hash inputs; dedup layers seeing same x.
+    Track convergence via cossim(components_t, components_{t-1})
+  After:
+    Redistribute ranks by explained_variance_ratio (ρ scale)
+    A_l ← svd.components_[:rank_l]                  # top-rank rows
+    B_l ← 0
+  forward = vanilla LoRA path (`scale·B@A·x`)
+
+  ours src/lora_lite/variants/eva.py:
+  group_init(model, targets, calibration_data):
+    hooks capture pre-forward inputs per layer
+    for batch in calibration_data: model(batch)
+    for each target:
+      X = cat(captured)                              # (N, d_in), float32 on cpu
+      _,_,Vh = torch.linalg.svd(X, full_matrices=False)
+      A ← Vh[:r]                                     # uniform r per layer
+  forward(x, y):
+    return y + (α/r) · (B @ A @ x)                   # B=0 at t=0  → identity
+
+  Diff vs peft:
+  - ✓ Top-r right singular vectors of pooled inputs → A. Math identical.
+  - ✓ B=0 init → identity at t=0.
+  - ✓ A,B both trainable post-init (peft same).
+  - ✗ Full SVD on cpu-pooled tensor vs. peft's IncrementalPCA — limits us to
+  small calibration sets (we cat all activations in RAM). The docstring
+  acknowledges this.
+  - ✗ No rank redistribution (rho param). All targets get same r. Acknowledged.
+  - ✗ No QKV input dedup. Acknowledged. Cost: 3× SVD work for layers that share
+  input. Correct, just slower.
+  - ✗ No convergence check. Single pass over calibration_data. Acknowledged.
+  - ⚠ Captured tensors moved to cpu+fp32 — fine, but a noisy 1k-batch on a 70B
+  model = lots of RAM. Just a scaling note.
+
+  Verdict: correct minimal EVA, all simplifications stated up-front in
+  docstring. No bugs. If you ever want to scale to large calibration corpora,
+  swap the torch.cat → svd for IncrementalPCA.
+
+  Read 1 file (ctrl+o to expand)
+
+● 6. HRA review
+
+  Paper (Yuan et al. 2024):
+  W' = W·R,     R = ∏_{i=0..r-1} H_i,    H_i = I - 2·u_i·u_i^T / ||u_i||^2
+  init (paper): independent random columns
+  peft variant: paired columns (u_{2k}=u_{2k+1}) → R=I exactly at t=0, even r
+  GS variant (apply_GS=True): explicit Gram-Schmidt for strict orthogonality
+  Loss-side: orthogonality regularizer (Eq. 6); not part of layer.
+
+  peft peft_hra_layer.py:208-265:
+  hra_u: (d_in, r)                                 # COLUMNS are vectors
+  get_delta_weight():
+    opt_u = opt_u / opt_u.norm(dim=0)              # pre-normalize columns
+    R = I_{d_in}
+    for i in 0..r-1:                               # forward order
+        u = opt_u[:, i]
+        R = R - 2·R·u·u^T                          # R ← R · H_i
+  forward(x):
+    R = product over active adapters
+    return F.linear(x, W @ R, bias)                # = x · R^T · W^T
+  (effectively R applied to x)
+  init: half_u = kaiming((d_in, r/2)); u = repeat_interleave(half_u, 2, dim=1)
+   # cols 0=1, 2=3, ...
+
+  ours src/lora_lite/variants/hra.py:53-75:
+  lora_U: (r, d_in)                                # ROWS are vectors
+  (transpose convention)
+  forward_input(x):
+    Rx = x
+    for i = r-1 downto 0:                          # reverse order, applied
+  directly
+        u = U[i]
+        sq = (u·u).sum().clamp_min(1e-12)
+        coeff = (Rx · u) · (2/sq)
+        Rx = Rx - coeff · u                        # Rx ← Rx · H_i
+    return Rx                                       # then base layer applies W
+  to this
+  init: half = kaiming((r/2, d_in)); U = repeat_interleave(half, 2, dim=0)    #
+  rows 0=1, 2=3, ...
+
+  Diff vs peft:
+  - ✓ Math equivalent. peft computes R = H_0·H_1·...·H_{r-1} (col-vector
+  convention), then applies via x·R^T = x·H_{r-1}·...·H_0 (since H is
+  symmetric). Ours iterates i = r-1 → 0 doing Rx ← Rx·H_i, computing
+  x·H_{r-1}·...·H_0. Same.
+  - ✓ symmetric init: row pairs vs col pairs — consistent with our row-vector
+  convention.
+  - ✓ identity at t=0: paired u_a=u_b → H_a·H_a=I (involution). R=I.
+  - ⚠ No apply_GS=True path. peft offers Gram-Schmidt orthogonalization.
+  Docstring acknowledges via "Note: paper's orthogonality regularizer (Eq. 6) is
+   loss-side". Ours uses pure Householder products (which already give exactly
+  orthogonal R at any step), so GS is redundant unless you want unit-norm
+  columns. Fine to omit.
+  - ✓ More efficient than peft. Avoids materializing (d_in × d_in) R matrix;
+  applies reflections directly to x in O(r·d_in) not O(r·d_in²).
+  - ⚠ Slight gradient-flow difference. peft pre-normalizes opt_u / 
+  ||opt_u||_col, so gradients flow through normalization. Ours keeps ||u||² in
+  the denominator each step, gradients flow through that. Both define the same
+  orthogonal H_i; gradients should give equivalent training to within numerical
+  noise, but not bit-identical.
+  - ✓ even-r requirement raised loudly (peft warns + falls back; we raise —
+  preferable for fail-fast).
+
+  Verdict: correct + faster than peft. Ordering bug from 67a6daf is properly
+  fixed (verified: i = r-1 → 0 iteration matches peft's R = H_0..H_{r-1} then
+  x·R^T).
+  Read 1 file (ctrl+o to expand)
+
+● 7. IA3 review
+
+  Paper (Liu et al. 2022):
+  y = ℓ ⊙ (W·x)        for attention K, V              (output-side gate)
+  y = W_2·(ℓ_ff ⊙ γ(W_1·x))   for FF                    (mid-FFN gate, T5)
+  init: ℓ = 1
+
+  peft peft_ia3_layer.py:161-188 (single class with is_feedforward flag):
+  if is_feedforward:
+      g shape (1, d_in)
+      interm = x * g
+      return base_layer(interm)                        # input-side
+  else:
+      g shape (d_out, 1)
+      result = base_layer(x)
+      return result * g                                 # output-side
+  init: g ← ones (when init_ia3_weights=True, default)
+  default targets: ["k_proj", "v_proj", "down_proj"];
+  feedforward_modules=["down_proj"]
+
+  ours src/lora_lite/variants/ia3.py:38-76 (two classes IA3, IA3FF):
+  IA3   (output-side, e.g. k_proj/v_proj):
+      g shape (d_out,);  init ones
+      forward(x, y) = y * g
+
+  IA3FF (input-side, e.g. down_proj/fc2):
+      g shape (d_in,);  init ones
+      forward_input(x) = x * g                          # base_layer applied
+  after by host
+
+  Diff vs peft:
+  - ✓ math identical to peft's two branches.
+  - ✓ init=ones matches.
+  - ✓ Splitting into two classes (rather than is_feedforward flag) is cleaner —
+  fail-fast: which class you register fixes the side, no boolean to misset.
+  - ⚠ peft's output-side path also scales base_layer.bias during merge. We
+  don't merge (forward-only adapter), so no issue at training time — but if you
+  ever add merge, watch this.
+  - ⚠ docstring example uses regex r"\\.k_proj$" which under YAML/Python would
+  match a literal .k_proj string-end; check that target_names is treated as
+  regex by your attach() (matches the behavior in variant.py).
+  - ⚠ Position-on-Llama: peft applies "ff" gate at down_proj input, which is
+  gate*up (post-SiLU). This deviates from paper's T5 position (post-activation
+  of single W_1) but matches peft's default for Llama-style. Acknowledged via
+  docstring example.
+
+  Verdict: correct, cleaner than peft. No bugs.
+
+❯ ko! so what do we need to fix? 
+
+● Fixes needed (from reviews 1-7)
+
+  Real bug (1):
+  - dora.py:62-63 — missing .detach() on the LoRA path inside the norm. Paper
+  §4.3 explicitly says treat ||V+ΔV||_c as a constant; peft detaches twice.
+  Without it, grads flow through the norm denominator → unstable training + ~2×
+  memory.
+  V = layer.weight + scale * BA.detach()       # detach BA here
+  v_norm = V.norm(dim=1).clamp_min(1e-12).detach()   # belt & braces
+
+  Behavioral / docstring (2):
+  - pissa.py — at α≠r, A,B starting magnitude differs from peft by √scale per
+  matrix (peft pre-divides S/scale). Either match peft (Sr /= scale before
+  computing √Sr factors) or assert cfg.alpha == cfg.r and tighten the docstring.
+  - delora.py:36 — lambda0=0.0 default is bit-identity but a foot-gun: at λ=0
+  the gradient on A,B is zero, so training is dead until λ moves. Either change
+  default to peft's 15.0, or expand the existing comment to flag this for new
+  users.
+
+  Clean (4): lora, eva, hra, ia3 — no fixes.
+
+  Pending: antipasto.py (review #8 not yet done; want me to continue?).
+
+✻ Perused for 5m 30s
+
+❯ sure do antipasto now...                                                      
+
+  Read 1 file (ctrl+o to expand)
+
+● 8. AntiPaSTO review
+
+  Reference (antipasto3, Flax):
+  kernel = U·diag(S)·Vh + W_res             # kernel: (in, out)
+  init U,S,Vh,W_res = svd(kernel) (frozen, fp32 / bf16 W_res)
+  trainable:
+    delta_s     ∼ truncated_normal·4e-4 + 4e-4   # small POSITIVE bias
+  (sym-break)
+    rot_T       ∼ truncated_normal·1e-4          # small random
+  forward(x, alpha):
+    A = scatter(rot_T into upper-triu of (n_blocks, bs, bs))
+    A = 0.5·(A - A^T);  A = a_lim·tanh(A/a_lim)
+    X = α·A/2                                     # << α scales rotation
+    R = (I-X)^-1 (I+X)                            # block Cayley
+    if rotate_U:  U_rot = U @ R                   # einsum, never builds full
+  (r,r)
+    if rotate_V:  Vh_rot = R @ Vh
+    S_scaled = S + α·delta_s
+    return (x @ U_rot)·S_scaled @ Vh_rot + x @ W_res
+  Identity property: bidirectional symmetry — R(α=+1) and R(α=-1) are exact
+  inverses.
+  At α=0: U,S,Vh untouched → kernel reproduced.
+
+  ours src/lora_lite/variants/antipasto.py:
+  weight (pytorch): (d_out, d_in);  SVD: U:(d_out,r), S:(r,), Vh:(r,d_in)
+  init: U,S,Vh frozen buffers; W_res mutates layer.weight (PiSSA-style)
+  trainable:
+    delta_s = 0
+    rot_T   = 0                                   # << EXACT identity at t=0
+  forward(x, y):
+    A = scatter(rot_T)                            # (n_blocks, bs, bs)
+    A = 0.5·(A - A^T);  A = a_lim·tanh(A/a_lim)
+    X = A/2                                        # << no α
+    R_blocks = Cayley(X)
+    R = block_diag(R_blocks)                       # << builds full (r,r) via
+  for-loop
+    if rotate_basis=="V":  Vh_eff = R @ Vh
+    elif rotate_basis=="U": U_eff = U @ R^T
+    S_eff = S + delta_s
+    h = (x @ Vh_eff^T) · S_eff
+    delta = h @ U_eff^T
+    return y + delta                               # y = x @ W_res^T already
+  Identity at t=0: rot_T=0 → R=I, delta_s=0 → delta = x @ Vh^T @ diag(S) @ U^T =
+   x @ W_svd^T → exact bit-identity.
+
+  Diff vs antipasto3:
+
+  - ⚠ No alpha steering coefficient. antipasto3's headline feature —
+  bidirectional symmetry (R(+α)·R(-α)=I) — is dropped. If you intend antipasto
+  as a fine-tuning-only adapter, this is a deliberate scope cut; if you ever
+  want bidirectional steering at inference, you'd need to thread an α through
+  the forward.
+  - ⚠ Rotation chirality flipped. antipasto3 rotates the input basis by R (U @ 
+  R); ours rotates by R^T (Vh_eff = R @ Vh ⇒ (x @ Vh^T) @ R^T). Same
+  orthogonal-group element up to inversion, so gradient-equivalent under sign
+  flip of rot_T. Not a correctness bug, but checkpoints aren't transferable
+  between the two impls without a sign flip.
+  - ✓ Stricter t=0 identity. Ours zero-inits both delta_s and rot_T → exact
+  bit-identity. antipasto3 nudges delta_s ≈ +4e-4 and rot_T ∼ 1e-4 for symmetry
+  breaking.
+  Foot-gun: at exact zero rotation, ∂loss/∂rot_T may be sign-symmetric (rotating
+   in either direction gives same loss to first order), so optimizer can stall
+  on rot_T while delta_s carries the load. antipasto3's small bias avoids this.
+  Worth a docstring note.
+  - ✗ Perf: full (r,r) block-diagonal materialized via Python for-loop in
+  _block_diag. antipasto3 uses einsum('dnb,nbc->dnc', U_reshaped, R_blocks) to
+  apply each block directly without ever building the (r,r) matrix. For r=64,
+  bs=4 this is 16 reflective blocks; the for-loop is O(r²) memory and Python
+  overhead. Easy fix:
+  # rotate V (input basis): replace block_diag + matmul with einsum
+  Vh_blocks = Vh.reshape(n_blocks, bs, d_in)
+  Vh_eff = einsum(R_blocks, Vh_blocks, "n a b, n b i -> n a i").reshape(r, d_in)
+  - ⚠ rotate_basis enum ("V" XOR "U") vs. antipasto3's two booleans (can do
+  both). Minor expressivity loss.
+  - ✓ Cayley, skew construction, tanh angle clamping all match antipasto3
+  exactly (incl. the 0.5 factor on (A - A^T)).
+  - ✓ W_res via PiSSA-style in-place mutation of layer.weight is more
+  memory-efficient than antipasto3's separate buffer; semantically identical.
+  - ⚠ arxiv URL: https://arxiv.org/abs/2601.07473 — earlier I confirmed it
+  returns HTTP 200, so the paper exists. Fine.
+
+  Verdict: correct as a fine-tuning adapter with stricter t=0 identity. Two
+  divergences from antipasto3 worth deciding on:
+
+  1. Chirality: trivial sign-flip in skew if you want checkpoint compat with
+  antipasto3 — otherwise leave.
+  2. No α: if antipasto needs to support inference-time steering (the paper's
+  selling point), thread an α scalar through the forward and S_eff = S + 
+  α·delta_s; X = α·A/2.
+
+  And one perf fix: kill _block_diag, use einsum.
+
+❯ ok now make a task for each fix and fix pls 
+
+● Update(src/lora_lite/variants/dora.py)
+  ⎿  Added 4 lines, removed 3 lines
+      57      ) -> Float[T, '*B o']:
+      58          cfg = layer._lora_cfg
+      59          scale = cfg.alpha / cfg.r
+      60 -        # V = W + scale * B @ A                                
+      60 +        # Paper §4.3: treat ||V+ΔV||_c as a constant (detach fr
+         +om grad graph) for                                             
+      61 +        # stability and ~2x lower memory. Match peft (lora_weig
+         +ht.detach + weight_norm.detach).                               
+      62          BA = einsum(layer.lora_B, layer.lora_A, "o r, r i -> o 
+          i")
+      62 -        V = layer.weight + scale * BA                          
+         -# (d_out, d_in)                                                
+      63 -        v_norm = V.norm(dim=1).clamp_min(1e-12)                
+         -# (d_out,)                                                     
+      63 +        V = layer.weight + scale * BA.detach()                 
+         +# (d_out, d_in)                                                
+      64 +        v_norm = V.norm(dim=1).clamp_min(1e-12).detach()       
+         +# (d_out,)                                                     
+      65          # Bias passes through unscaled (matches peft).
+      66          bias = getattr(layer, "bias", None)
+      67          wx = y if bias is None else (y - bias)
+
+● Update(src/lora_lite/variants/pissa.py)
+  ⎿  Added 4 lines, removed 3 lines
+       3  Meng et al. 2024  https://arxiv.org/abs/2404.02948
+       4  
+       5      W = U S Vh        (truncated to top-r)
+       6 -    B = U sqrt(S),  A = sqrt(S) Vh,   W_res = W - B A          
+       6 +    Sr_eff = Sr / (alpha/r)                          # peft-sty
+         +le: pre-divide so A/B                                          
+       7 +    B = U sqrt(Sr_eff),  A = sqrt(Sr_eff) Vh         # update d
+         +ynamics match for any alpha                                    
+       8 +    W_res = W - (alpha/r) B A      = W - U Sr Vh     # scaling 
+         +cancels symmetrically                                          
+       9  
+       8 -Identity at t=0: W_res + B@A == W (bf16 round-trip, not bit-exa
+         -ct).                                                           
+       9 -Pass alpha=r for paper-faithful scale=1.                       
+      10 +Identity at t=0: W_res + (alpha/r) B@A == W (fp32 round-trip, b
+         +f16 cast can drift).                                           
+      11  
+      12  Refs:
+      13    - paper: https://github.com/MuLabPKU/PiSSA/blob/main/utils/in
+          it_pissa.py
+
+● Update(src/lora_lite/variants/pissa.py)
+  ⎿  Added 7 lines, removed 3 lines
+      52          W = layer.weight.data.float()                       # (
+          d_out, d_in)
+      53          U, S, Vh = torch.linalg.svd(W, full_matrices=False)
+      54          r = cfg.r
+      55 +        scale = cfg.alpha / cfg.r                              
+      56          Ur, Sr, Vhr = U[:, :r], S[:r], Vh[:r, :]
+      56 -        sqrtS = Sr.sqrt()                                      
+      57 -        # B @ A = Ur diag(Sr) Vhr;  pick B = Ur sqrt(Sr),  A = 
+         -sqrt(Sr) * Vhr                                                 
+      57 +        # Pre-divide Sr by scaling so A/B carry "natural" magni
+         +tudes for any alpha                                            
+      58 +        # (peft pissa_init does this; needed so the alpha/r sca
+         +ling on the forward                                            
+      59 +        # gives matched update dynamics rather than re-scaling 
+         +A,B by sqrt(scale)).                                           
+      60 +        Sr_eff = Sr / scale                                    
+      61 +        sqrtS = Sr_eff.sqrt()                                  
+      62 +        # B @ A = Ur diag(Sr/scale) Vhr;  W_res = W - scale * B
+         +@A = W - Ur diag(Sr) Vhr.                                      
+      63          B = (Ur * sqrtS).to(cfg.dtype)
+      64          A = (sqrtS[:, None] * Vhr).to(cfg.dtype)
+      65          layer.lora_B.data.copy_(B)
+      66          layer.lora_A.data.copy_(A)
+      67          # fp32 subtraction so W_res stays accurate.
+      68          BA = (B.float() @ A.float())
+      64 -        scale = cfg.alpha / cfg.r                              
+      69          layer.weight.data.copy_((W - scale * BA).to(layer.weigh
+          t.dtype))
+      70  
+      71      @staticmethod
+● Update(src/lora_lite/variants/antipasto.py)
+  ⎿  Removed 9 lines
+      59      return _cayley(A)
+      60  
+      61  
+      62 -def _block_diag(blocks: torch.Tensor) -> torch.Tensor:         
+      63 -    """(n_blocks, bs, bs) -> (n_blocks*bs, n_blocks*bs) block-d
+         -iagonal."""                                                    
+      64 -    n, bs, _ = blocks.shape                                    
+      65 -    out = blocks.new_zeros(n * bs, n * bs)                     
+      66 -    for i in range(n):                                         
+      67 -        out[i * bs : (i + 1) * bs, i * bs : (i + 1) * bs] = blo
+         -cks[i]                                                         
+      68 -    return out                                                 
+      69 -                                                               
+      70 -                                                               
+      62  @register
+      63  class AntiPaSTO:
+      64      name = "antipasto"
+
+● Update(src/lora_lite/variants/antipasto.py)
+  ⎿  Added 11 lines, removed 4 lines
+      114          S = layer.lora_S.to(x.dtype)                          
+           # (r,)
+      115          Vh = layer.lora_Vh.to(x.dtype)                        
+           # (r, d_in)
+      116  
+      117 -        R_blocks = _build_rotation(layer.lora_rot_T.float(), b
+          -s, max_angle)                                                 
+      118 -        R = _block_diag(R_blocks).to(x.dtype)                 
+          -# (r, r)                                                      
+      117 +        R_blocks = _build_rotation(layer.lora_rot_T.float(), b
+          +s, max_angle).to(x.dtype)                                     
+      118 +        n_blocks, _, _ = R_blocks.shape                       
+          +# (n, bs, bs)                                                 
+      119 +        d_in, d_out = Vh.shape[1], U.shape[0]                 
+      120 +        r = n_blocks * bs                                     
+      121  
+      122 +        # Apply block-diagonal R per-block via einsum, never m
+          +aterializing (r,r).                                           
+      123          if rotate_basis == "V":
+      121 -            Vh_eff = R @ Vh                                   
+          -# rotate INPUT basis                                          
+      124 +            # Vh_eff = R @ Vh, viewed block-wise on the r-axis
+          +.                                                             
+      125 +            Vh_blocks = Vh.reshape(n_blocks, bs, d_in)        
+      126 +            Vh_eff = einsum(R_blocks, Vh_blocks, "n a b, n b i
+          + -> n a i").reshape(r, d_in)                                  
+      127              U_eff = U
+      128          elif rotate_basis == "U":
+      129 +            # U_eff = U @ R.T, viewed block-wise on the r-axis
+          +.                                                             
+      130 +            U_blocks = U.reshape(d_out, n_blocks, bs)         
+      131 +            U_eff = einsum(U_blocks, R_blocks, "d n b, n c b -
+          +> d n c").reshape(d_out, r)                                   
+      132              Vh_eff = Vh
+      125 -            U_eff = U @ R.T                                   
+          -# rotate OUTPUT basis                                         
+      133          else:
+      134              raise ValueError(f"rotate_basis must be 'U' or 'V'
+           , got {rotate_basis!r}")
+      135  
+
+● Verify the antipasto change with a quick import + a smoke equivalence check.
+
+● Bash(python -c "
+      import torch…)
+  ⎿  Error: Exit code 127
+     (eval):1: command not found: python
+
+❯ > einsum(R_blocks, Vh_blocks, "n a b, n b i -> n a i").reshape(r, d_in) 
+                                                                          
+  should not the reshape use einops reshape? there is also reduce         
+
+● You're right — use einops rearrange for the shape ops to keep them
+  self-documenting. Updating.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(src/lora_lite/variants/antipasto.py)
+  ⎿  Added 1 line, removed 1 line
+      19  from typing import Literal
+      20  
+      21  import torch
+      22 -from einops import einsum                                      
+      22 +from einops import einsum, rearrange                           
+      23  from jaxtyping import Float
+      24  from torch import nn, Tensor as T
+      25  
+
+● Update(src/lora_lite/variants/antipasto.py)
+  ⎿  Added 7 lines, removed 7 lines
+      115          Vh = layer.lora_Vh.to(x.dtype)                        
+           # (r, d_in)
+      116  
+      117          R_blocks = _build_rotation(layer.lora_rot_T.float(), b
+           s, max_angle).to(x.dtype)
+      118 -        n_blocks, _, _ = R_blocks.shape                       
+          -# (n, bs, bs)                                                 
+      119 -        d_in, d_out = Vh.shape[1], U.shape[0]                 
+      120 -        r = n_blocks * bs                                     
+      118 +        n_blocks = R_blocks.shape[0]                          
+          +# R_blocks: (n, bs, bs)                                       
+      119  
+      120          # Apply block-diagonal R per-block via einsum, never m
+           aterializing (r,r).
+      121          if rotate_basis == "V":
+      122              # Vh_eff = R @ Vh, viewed block-wise on the r-axis
+           .
+      125 -            Vh_blocks = Vh.reshape(n_blocks, bs, d_in)        
+      126 -            Vh_eff = einsum(R_blocks, Vh_blocks, "n a b, n b i
+          - -> n a i").reshape(r, d_in)                                  
+      123 +            Vh_blocks = rearrange(Vh, "(n a) i -> n a i", n=n_
+          +blocks)                                                       
+      124 +            Vh_rot = einsum(R_blocks, Vh_blocks, "n a b, n b i
+          + -> n a i")                                                   
+      125 +            Vh_eff = rearrange(Vh_rot, "n a i -> (n a) i")    
+      126              U_eff = U
+      127          elif rotate_basis == "U":
+      128              # U_eff = U @ R.T, viewed block-wise on the r-axis
+           .
+      130 -            U_blocks = U.reshape(d_out, n_blocks, bs)         
+      131 -            U_eff = einsum(U_blocks, R_blocks, "d n b, n c b -
+          -> d n c").reshape(d_out, r)                                   
+      129 +            U_blocks = rearrange(U, "d (n b) -> d n b", n=n_bl
+          +ocks)                                                         
+      130 +            U_rot = einsum(U_blocks, R_blocks, "d n b, n c b -
+          +> d n c")                                                     
+      131 +            U_eff = rearrange(U_rot, "d n c -> d (n c)")      
+      132              Vh_eff = Vh
+      133          else:
+      134              raise ValueError(f"rotate_basis must be 'U' or 'V'
+           , got {rotate_basis!r}")
+
+● Now run the equivalence smoke check.
+
+  Listed 1 directory (ctrl+o to expand)
+
+● Bash(.venv/bin/python -c "
+      import torch…)
+  ⎿  t=0 identity err (V):  1.91e-06
+     einsum vs blockdiag (V): 1.31e-06
+     einsum vs blockdiag (U): 1.07e-06
+
+● All three checks pass at fp32 round-trip noise (~1e-6).
+
+● Quick sanity check on dora and pissa too.
+
+● Bash(.venv/bin/python -c "
+      import torch…)
+  ⎿  DoRA t=0 identity err: 0.00e+00
+     DoRA grad on A: 0.3232 (should be > 0)
+     DoRA grad on m: 3.2282 (should be > 0)
+     … +4 lines (ctrl+o to expand)
+
+● All three fixes verified:
+
+  - DoRA: t=0 bit-identity (err=0), grads still flow on A and m, but no longer
+  through v_norm (paper §4.3 / peft).
+  - PiSSA: bit-identity now holds for α ∈ {r/2, r, 2r}, not just α=r. Old impl
+  was only correct at α=r.
+  - AntiPaSTO: einsum path matches block-diag matmul to fp32 round-trip (~1e-6);
+   t=0 bit-identity preserved.
+
+  Summary
+
+  ┌───────────────────────────────────────────┬─────────────────────┬────────┐
+  │                    Fix                    │        File         │ Status │
+  ├───────────────────────────────────────────┼─────────────────────┼────────┤
+  │ 1. detach BA + v_norm (paper §4.3)        │ dora.py:62-64       │ ✓      │
+  ├───────────────────────────────────────────┼─────────────────────┼────────┤
+  │ 2. pre-divide Sr by scale to match peft   │ pissa.py:51-65      │ ✓      │
+  │ for any α                                 │                     │        │
+  ├───────────────────────────────────────────┼─────────────────────┼────────┤
+  │ 3. einops rearrange + per-block einsum,   │ antipasto.py:41-130 │ ✓      │
+  │ dropped _block_diag                       │                     │        │
+  └───────────────────────────────────────────┴─────────────────────┴────────┘
+
+  Skipped (judgment calls — flag if you want them):
+  - delora lambda0=0.0 default → already documented in docstring
+  - antipasto α steering coefficient → design decision, ask before adding
+  - antipasto rotation chirality vs antipasto3 → gradient-equivalent under sign
+  flip; no checkpoint compat path anyway (jax↔torch)
+
+✻ Tinkered for 5m 55s

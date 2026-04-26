@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import torch
-from einops import einsum
+from einops import einsum, rearrange
 from jaxtyping import Float
 from torch import nn, Tensor as T
 
@@ -57,15 +57,6 @@ def _build_rotation(rot_T: torch.Tensor, bs: int, max_angle: float) -> torch.Ten
     a_limit = 2.0 * math.tan(max_angle / 2.0)
     A = a_limit * torch.tanh(A / a_limit)
     return _cayley(A)
-
-
-def _block_diag(blocks: torch.Tensor) -> torch.Tensor:
-    """(n_blocks, bs, bs) -> (n_blocks*bs, n_blocks*bs) block-diagonal."""
-    n, bs, _ = blocks.shape
-    out = blocks.new_zeros(n * bs, n * bs)
-    for i in range(n):
-        out[i * bs : (i + 1) * bs, i * bs : (i + 1) * bs] = blocks[i]
-    return out
 
 
 @register
@@ -123,15 +114,22 @@ class AntiPaSTO:
         S = layer.lora_S.to(x.dtype)                          # (r,)
         Vh = layer.lora_Vh.to(x.dtype)                        # (r, d_in)
 
-        R_blocks = _build_rotation(layer.lora_rot_T.float(), bs, max_angle)
-        R = _block_diag(R_blocks).to(x.dtype)                 # (r, r)
+        R_blocks = _build_rotation(layer.lora_rot_T.float(), bs, max_angle).to(x.dtype)
+        n_blocks = R_blocks.shape[0]                          # R_blocks: (n, bs, bs)
 
+        # Apply block-diagonal R per-block via einsum, never materializing (r,r).
         if rotate_basis == "V":
-            Vh_eff = R @ Vh                                   # rotate INPUT basis
+            # Vh_eff = R @ Vh, viewed block-wise on the r-axis.
+            Vh_blocks = rearrange(Vh, "(n a) i -> n a i", n=n_blocks)
+            Vh_rot = einsum(R_blocks, Vh_blocks, "n a b, n b i -> n a i")
+            Vh_eff = rearrange(Vh_rot, "n a i -> (n a) i")
             U_eff = U
         elif rotate_basis == "U":
+            # U_eff = U @ R.T, viewed block-wise on the r-axis.
+            U_blocks = rearrange(U, "d (n b) -> d n b", n=n_blocks)
+            U_rot = einsum(U_blocks, R_blocks, "d n b, n c b -> d n c")
+            U_eff = rearrange(U_rot, "d n c -> d (n c)")
             Vh_eff = Vh
-            U_eff = U @ R.T                                   # rotate OUTPUT basis
         else:
             raise ValueError(f"rotate_basis must be 'U' or 'V', got {rotate_basis!r}")
 

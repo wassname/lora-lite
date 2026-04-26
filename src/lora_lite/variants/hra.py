@@ -17,7 +17,7 @@ Refs:
     (offline: docs/refs/peft_hra_layer.py)
 """
 import torch
-from einops import einsum
+from einops import einsum, repeat
 from jaxtyping import Float
 from torch import nn, Tensor as T
 from dataclasses import dataclass
@@ -56,7 +56,7 @@ class HRA:
             r, d_in = layer.lora_U.shape
             half = torch.empty(r // 2, d_in, dtype=layer.lora_U.dtype, device=layer.lora_U.device)
             nn.init.kaiming_uniform_(half, a=5 ** 0.5)
-            layer.lora_U.copy_(torch.repeat_interleave(half, 2, dim=0))
+            layer.lora_U.copy_(repeat(half, "h d -> (h two) d", two=2))
         return
 
     @staticmethod

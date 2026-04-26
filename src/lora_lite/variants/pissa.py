@@ -3,10 +3,11 @@
 Meng et al. 2024  https://arxiv.org/abs/2404.02948
 
     W = U S Vh        (truncated to top-r)
-    B = U sqrt(S),  A = sqrt(S) Vh,   W_res = W - B A
+    Sr_eff = Sr / (alpha/r)                          # peft-style: pre-divide so A/B
+    B = U sqrt(Sr_eff),  A = sqrt(Sr_eff) Vh         # update dynamics match for any alpha
+    W_res = W - (alpha/r) B A      = W - U Sr Vh     # scaling cancels symmetrically
 
-Identity at t=0: W_res + B@A == W (bf16 round-trip, not bit-exact).
-Pass alpha=r for paper-faithful scale=1.
+Identity at t=0: W_res + (alpha/r) B@A == W (fp32 round-trip, bf16 cast can drift).
 
 Refs:
   - paper: https://github.com/MuLabPKU/PiSSA/blob/main/utils/init_pissa.py
@@ -51,16 +52,20 @@ class PiSSA:
         W = layer.weight.data.float()                       # (d_out, d_in)
         U, S, Vh = torch.linalg.svd(W, full_matrices=False)
         r = cfg.r
+        scale = cfg.alpha / cfg.r
         Ur, Sr, Vhr = U[:, :r], S[:r], Vh[:r, :]
-        sqrtS = Sr.sqrt()
-        # B @ A = Ur diag(Sr) Vhr;  pick B = Ur sqrt(Sr),  A = sqrt(Sr) * Vhr
+        # Pre-divide Sr by scaling so A/B carry "natural" magnitudes for any alpha
+        # (peft pissa_init does this; needed so the alpha/r scaling on the forward
+        # gives matched update dynamics rather than re-scaling A,B by sqrt(scale)).
+        Sr_eff = Sr / scale
+        sqrtS = Sr_eff.sqrt()
+        # B @ A = Ur diag(Sr/scale) Vhr;  W_res = W - scale * B@A = W - Ur diag(Sr) Vhr.
         B = (Ur * sqrtS).to(cfg.dtype)
         A = (sqrtS[:, None] * Vhr).to(cfg.dtype)
         layer.lora_B.data.copy_(B)
         layer.lora_A.data.copy_(A)
         # fp32 subtraction so W_res stays accurate.
         BA = (B.float() @ A.float())
-        scale = cfg.alpha / cfg.r
         layer.weight.data.copy_((W - scale * BA).to(layer.weight.dtype))
 
     @staticmethod

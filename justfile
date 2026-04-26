@@ -72,3 +72,34 @@ metamath-queue variant="lora" steps="5000" model="Qwen/Qwen3-0.6B-Base":
 		-l "why: HF-style MetaMathQA->GSM8K benchmark for {{model}} {{variant}} at {{steps}} steps; resolve: result JSON under outputs/metamath_gsm8k proves grad>0 dθ>0 base_grad_leaks=0 and reports valid/test accuracy" \
 		-w "$PWD" -o 1 -- \
 		uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py --model {{model}} --variant {{variant}} --steps {{steps}}
+
+metamath-queue-all model="Qwen/Qwen3-0.6B-Base" steps="5000" variants="lora pissa delora dora hra ia3 ia3_ff eva antipasto":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	for variant in {{variants}}; do
+		lr=1e-4
+		extra_args=(--target-name '(q_proj|v_proj)$' --layers all --r 32 --alpha 64)
+		case "$variant" in
+			delora)
+				lr=1e-3
+				;;
+			ia3)
+				lr=1e-3
+				extra_args=(--target-name '(k_proj|v_proj)$' --layers all --r 32 --alpha 64)
+				;;
+			ia3_ff)
+				lr=1e-3
+				extra_args=(--target-name '(down_proj)$' --layers all --r 32 --alpha 64)
+				;;
+			eva)
+				lr=1e-4
+				;;
+			antipasto)
+				lr=1e-4
+				;;
+		esac
+		pueue add \
+			-l "why: benchmark {{model}} ${variant} on MetaMathQA->GSM8K at {{steps}} steps; resolve: outputs/metamath_gsm8k/results/benchmark_results.tsv gets a row with accuracy commit time method argv and result JSON for ${variant}" \
+			-w "$PWD" -o 1 -- \
+			uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py --model {{model}} --variant "$variant" --steps {{steps}} --lr "$lr" "${extra_args[@]}"
+	done
