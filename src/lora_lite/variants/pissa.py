@@ -1,24 +1,18 @@
 """PiSSA: top-r SVD of W into A,B; replace W with W_res = W - B@A.
 
 Meng et al. 2024  https://arxiv.org/abs/2404.02948
-W_eff(t=0) = W_res + B@A = W (numerically; bf16 round-trip not bit-exact).
 
-DEVIATION FROM PAPER (documented):
-  - Paper sets adapter scale = 1 (no alpha/r factor); we keep LoRA's alpha/r
-    pipeline so callers must pass alpha=r to get paper-faithful identity.
-  - Saved adapter does NOT include W_res (would double checkpoint size). Instead
-    `adapter.save` records a fingerprint of the post-init base weights and
-    `adapter.load` re-runs PiSSA init then verifies the fingerprint matches
-    -- so loading onto a different base weight raises loudly instead of
-    silently producing wrong outputs.
+    W = U S Vh        (truncated to top-r)
+    B = U sqrt(S),  A = sqrt(S) Vh,   W_res = W - B A
 
-Reference implementations (for review/cross-check):
-  - PiSSA original (NeurIPS'24 spotlight) init script (SVD on dequant W):
-    https://github.com/MuLabPKU/PiSSA/blob/main/utils/init_pissa.py
+Identity at t=0: W_res + B@A == W (bf16 round-trip, not bit-exact).
+Pass alpha=r for paper-faithful scale=1.
+
+Refs:
+  - paper: https://github.com/MuLabPKU/PiSSA/blob/main/utils/init_pissa.py
     (offline: docs/refs/orig_pissa_init.py)
-  - peft PiSSA flavor (init_lora_weights='pissa') in:
-    https://github.com/huggingface/peft/blob/main/src/peft/tuners/lora/layer.py
-    (offline: docs/refs/peft_lora_layer.py, see pissa_init / loftq_init paths)
+  - peft:  https://github.com/huggingface/peft/blob/main/src/peft/tuners/lora/layer.py
+    (offline: docs/refs/peft_lora_layer.py, see pissa_init path)
 """
 import torch
 from einops import einsum
@@ -64,10 +58,8 @@ class PiSSA:
         A = (sqrtS[:, None] * Vhr).to(cfg.dtype)
         layer.lora_B.data.copy_(B)
         layer.lora_A.data.copy_(A)
-        # Compute BA in fp32 for the subtraction so W_res is accurate.
+        # fp32 subtraction so W_res stays accurate.
         BA = (B.float() @ A.float())
-        # NOTE: PiSSA uses scale=1 (alpha==r) implicitly via init. We let the user pick;
-        # for fidelity at t=0, the convention is alpha==r so scale==1. Document in README.
         scale = cfg.alpha / cfg.r
         layer.weight.data.copy_((W - scale * BA).to(layer.weight.dtype))
 

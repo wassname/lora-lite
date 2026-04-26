@@ -1,39 +1,18 @@
 """AntiPaSTO: SVD steering with learnable singular-value deltas + block-diagonal Cayley rotation.
 
-Paper: https://arxiv.org/pdf/2601.07473  (wassname, AntiPaSTO -- SVD-based PEFT)
-Repo:  https://github.com/wassname/AntiPaSTO
-Lite port of the AntiPaSTO3 SVD adapter from
-  https://github.com/wassname/antipasto3 (offline: docs/refs/antipasto3_svd_adapter.py)
+wassname 2026  https://arxiv.org/abs/2601.07473
 
-Decomposition (PyTorch nn.Linear convention, weight (d_out, d_in)):
+    W = U diag(S) Vh + W_res        (top-r SVD; W_res = W - U_r S_r Vh_r)
+    learn: delta_s (r,), rot_T (n_blocks, bs(bs-1)/2)
+    R = block_diag(Cayley(skew(rot_T)));  Vh_eff = R @ Vh (or U_eff = U @ R.T)
+    y = x @ W_res.T + ((x @ Vh_eff.T) * (S + delta_s)) @ U_eff.T
 
-    W = U diag(S) Vh + W_res     (top-r SVD; W_res = W - U_r diag(S_r) Vh_r)
+Identity at t=0: rot_T=0 -> R=I, delta_s=0 -> y == x @ W^T (fp32 SVD round-trip).
 
-We freeze U, S, Vh, W_res and learn:
-  - delta_s : (r,)                    -- additive delta to singular values
-  - rot_T   : (n_blocks, bs(bs-1)/2)  -- upper-triangle of skew matrix per block
-
-Forward (matches base layer convention exactly at t=0):
-
-    R          = block_diag(Cayley(skew(rot_T)))            # (r, r) effective
-    Vh_rot     = R @ Vh                                     # rotates input basis
-    S_eff      = S + delta_s                                # learnable spectrum
-    delta_y    = ((x @ Vh_rot.T) * S_eff) @ U.T             # rank-r path
-    base_y     = x @ W_res.T                                # frozen residual
-    y_total    = base_y + delta_y                           # == original output at t=0
-
-At init: rot_T = 0 -> R = I -> Vh_rot = Vh, delta_s = 0 -> S_eff = S, so
-delta_y reconstructs the truncated SVD term and y_total == x @ W^T to numerical
-precision (fp32 SVD round-tripped to cfg.dtype).
-
-WHICH BASIS IS ROTATED:
-  By default we rotate Vh (the INPUT singular basis). This is what AntiPaSTO3
-  calls `rotate_V=True` in adapter terms (V == Vh.T columns). To rotate U
-  (output basis) instead, pass `rotate_basis='U'` on the AntiPaSTOConfig.
-  Rotating both is not implemented (one rotation is enough to span the
-  identifiable steering directions; two is degenerate).
-
-REQUIRES even rank divisible by `block_size` (default 4). r=8, bs=4 -> 2 blocks.
+Refs:
+  - paper: https://github.com/wassname/AntiPaSTO
+  - lite port of: https://github.com/wassname/antipasto3
+    (offline: docs/refs/antipasto3_svd_adapter.py)
 """
 import math
 from dataclasses import dataclass
@@ -102,7 +81,7 @@ class AntiPaSTO:
         n_blocks = r // bs
         n_triu = bs * (bs - 1) // 2
         return {
-            # Frozen SVD components captured at init (buffers travel with state_dict).
+            # Frozen SVD components captured at init.
             "lora_U": ParamSpec((d_out, r), init="zeros", trainable=False, as_buffer=True),
             "lora_S": ParamSpec((r,), init="zeros", trainable=False, as_buffer=True),
             "lora_Vh": ParamSpec((r, d_in), init="zeros", trainable=False, as_buffer=True),
@@ -126,8 +105,6 @@ class AntiPaSTO:
             layer.lora_U.copy_(Ur.to(layer.lora_U.dtype))
             layer.lora_S.copy_(Sr.to(layer.lora_S.dtype))
             layer.lora_Vh.copy_(Vhr.to(layer.lora_Vh.dtype))
-            # W_res is the residual after rank-r truncation. Forward adds back
-            # the truncated path so total == W exactly at init (mod dtype).
             W_res = (W - (Ur * Sr) @ Vhr).to(layer.weight.dtype)
             layer.weight.data.copy_(W_res)
 

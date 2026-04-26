@@ -1,35 +1,16 @@
-"""EVA: Explained-Variance Adaptation. Paischer et al. 2024.
+"""EVA: Explained-Variance Adaptation. Paischer et al. 2024  https://arxiv.org/abs/2410.07170
 
-Paper: https://arxiv.org/abs/2410.07170 (also referred to as ICLR'25 EVA).
+LoRA forward `y + scale*(B@A@x)`; init A = top-r right singular vectors of the
+layer-input distribution on a small calibration set (instead of kaiming).
 
-Idea: instead of random A and zero B (LoRA) or SVD of W (PiSSA), initialize
-`lora_A` to the top-r right singular vectors of the LAYER INPUT distribution
-on a small calibration set. Forward = `y + scale * (B @ A @ x)` exactly like
-LoRA; with `lora_B = 0` the adapter is identity at t=0. Only B trains
-afterwards (A frozen). The result: each rank slot points along a direction
-that actually carries information at this layer.
+Identity at t=0: B=0.
 
-This is a stripped-down EVA; we do NOT implement:
-  - rank redistribution across layers via explained-variance ratios
-    (peft EVA computes an explained_variance_ratio per layer then redistributes
-    the global rank budget; we use a uniform `cfg.r` per layer).
-  - Incremental PCA over many micro-batches (we run one full SVD on the
-    pooled calibration activations per layer).
-  - Equal-input deduplication (peft hashes inputs to share SVD across QKV).
+Stripped down: uniform per-layer rank, single full SVD on pooled inputs, no QKV
+input dedup. (peft does rank redistribution + IncrementalPCA + hash dedup.)
 
-API stress-test: this variant requires data-driven init, so it implements
-`group_init(model, targets, cfg, calibration_data)` to drive a single forward
-pass on `calibration_data` with hooks that capture each target's input.
-
-Identity at t=0: `lora_B = 0` -> delta = 0 -> y unchanged.
-
-References:
-  - peft EVA (full impl, with IncrementalPCA + redistribution):
-    https://github.com/huggingface/peft/blob/main/src/peft/tuners/lora/eva.py
-    (offline: docs/refs/peft_eva.py)
-  - peft fine-tuning script demonstrating initialize_lora_eva_weights:
-    https://github.com/huggingface/peft/blob/main/examples/eva_finetuning/eva_finetuning.py
-    (offline: docs/refs/peft_eva_finetuning.py)
+Refs:
+  - peft: https://github.com/huggingface/peft/blob/main/src/peft/tuners/lora/eva.py
+    (offline: docs/refs/peft_eva.py; example: docs/refs/peft_eva_finetuning.py)
 """
 import torch
 from einops import einsum
@@ -58,13 +39,8 @@ class EVA:
     @staticmethod
     def param_specs(d_in, d_out, cfg):
         return {
-            # A is trainable Parameter (peft semantics): EVA only changes the INIT.
-            # peft copies SVD vectors into the LoRA A weight, which remains a regular
-            # nn.Linear.weight Parameter (docs/refs/peft_eva.py:529).
-            # On step 0 only B has nonzero grad (delta=0 since B=0); A starts moving
-            # once B becomes nonzero, same gradient pattern as DeLoRA.
+            # A trainable per peft: EVA only changes the init.
             "lora_A": ParamSpec((cfg.r, d_in), init="zeros", trainable=True),
-            # B is zero-init -> identity at t=0.
             "lora_B": ParamSpec((d_out, cfg.r), init="zeros", trainable=True),
         }
 

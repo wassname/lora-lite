@@ -2,20 +2,10 @@
 
 W' = m * V / ||V||_c   where V = W + (alpha/r) B A   (||.||_c = per-output-row L2 norm)
 
-At t=0:  B=0 -> V=W -> y_new = (m_init / ||W||_c) (Wx + 0) = Wx   when m_init = ||W||_c.
+Identity at t=0: B=0 and m=||W||_c -> y_new = Wx. Requires dense weight (nn.Linear only).
 
-Limitation: requires materializing the dense weight to compute ||V||_c. v1 supports
-plain nn.Linear only; bnb 4/8-bit layers raise loudly.
-
-DEVIATION (numerical):
-  - We differentiate through ||V||_c every forward. The paper's sec. 4.3 suggests
-    a 'cost-saving' variant that detaches ||V|| in backward (gradient only flows
-    through V); we do NOT do that. Real impact: slower step, slightly different
-    gradient direction. Faithful to the eq.5 forward, not the optimized one.
-
-Reference implementations (for review/cross-check):
-  - peft DoRA (separate file under lora/):
-    https://github.com/huggingface/peft/blob/main/src/peft/tuners/lora/dora.py
+Refs:
+  - peft: https://github.com/huggingface/peft/blob/main/src/peft/tuners/lora/dora.py
     (offline: docs/refs/peft_lora_dora.py)
 """
 import torch
@@ -71,8 +61,7 @@ class DoRA:
         BA = einsum(layer.lora_B, layer.lora_A, "o r, r i -> o i")
         V = layer.weight + scale * BA                          # (d_out, d_in)
         v_norm = V.norm(dim=1).clamp_min(1e-12)                # (d_out,)
-        # Bias passes through UNSCALED -- only Wx + scale*BAx is normalized.
-        # Matches peft DoRA forward (docs/refs/peft_lora_dora.py:157-161).
+        # Bias passes through unscaled (matches peft).
         bias = getattr(layer, "bias", None)
         wx = y if bias is None else (y - bias)
         h = einsum(x, layer.lora_A, "... i, r i -> ... r")

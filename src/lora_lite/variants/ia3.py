@@ -1,28 +1,18 @@
-"""IA3-style elementwise gating. Liu et al. 2022  https://arxiv.org/abs/2205.05638
+"""IA3 elementwise gating. Liu et al. 2022  https://arxiv.org/abs/2205.05638
 
-Two registered variants, matching the paper's two regimes:
+* `ia3`    -- output-side: y_new = y * g, g shape (d_out,). For k_proj, v_proj.
+* `ia3_ff` -- input-side:  y_new = base(x * g), g shape (d_in,). For down_proj/fc2.
 
-* `ia3`     -- OUTPUT-side gating, parameter shape (d_out,).
-              y_new = y * g.  Use for attention projections (k_proj, v_proj).
+Identity at t=0: g=1.
 
-* `ia3_ff`  -- INPUT-side gating, parameter shape (d_in,).
-              y_new = base_layer(x * g).  Use for FFN-down layers (down_proj,
-              fc2). Equivalent to the paper's "gate the FFN intermediate (post-
-              activation)" position because down_proj's input IS that
-              intermediate hidden state.
-
-In both cases g is initialized to 1 -> identity at t=0.
-
-To match the paper exactly on a Llama/Qwen-style block requires TWO attach
-passes (one per variant), since each variant uses one hook type:
+Example (paper's Llama/Qwen block needs both passes):
 
     cfg_attn = IA3Config(   target_names=(r"\\.k_proj$", r"\\.v_proj$"))
     cfg_ffn  = IA3FFConfig( target_names=(r"\\.down_proj$",))
 
-Reference implementation:
-  - peft IA3 layer (is_feedforward toggles input-vs-output gating, see
-    docs/refs/peft_ia3_layer.py:177-188 forward and :214 update_layer):
-    https://github.com/huggingface/peft/blob/main/src/peft/tuners/ia3/layer.py
+Refs:
+  - peft: https://github.com/huggingface/peft/blob/main/src/peft/tuners/ia3/layer.py
+    (offline: docs/refs/peft_ia3_layer.py)
 """
 import torch
 from jaxtyping import Float

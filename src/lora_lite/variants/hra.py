@@ -1,31 +1,19 @@
 """HRA: Householder Reflection Adaptation. Yuan et al. 2024  https://arxiv.org/abs/2405.17484
 
-Paper formulation (Sec. 3): adapt each frozen weight as
+    W' = W R,   R = prod_{i=1..r} H_i,   H_i = I - 2 u_i u_i^T / ||u_i||^2
 
-    W' = W R,    R = prod_{i=1..r} H_i,    H_i = I - 2 u_i u_i^T / ||u_i||^2
+R is in input space (d_in x d_in); applied via a `forward_input` pre-hook so the
+frozen base layer (bnb 4/8-bit OK) computes W (R x).
 
-so the layer output becomes  y' = W' x = W (R x).  R is in INPUT space (d_in x d_in).
+Identity at t=0: peft-style symmetric init -- U pairs (U[0]=U[1], ...) so adjacent
+H_i H_i = I cancel, R = I exactly. Requires even r. Paired rows diverge after step 1.
 
-We implement this via a `forward_input` pre-hook that returns `R x`, then the
-frozen base layer (including bnb 4/8-bit Linear) computes `W (R x)` itself.
+Note: paper's orthogonality regularizer (Eq. 6) is loss-side; add it in your loop.
 
-Identity at t=0 (PEFT-style symmetric init, requires even r):
-  Rows are kaiming-init in pairs: U[0]=U[1], U[2]=U[3], ...  Adjacent pairs of
-  Householder reflections with identical vectors cancel exactly
-  (H_i H_i = I), so R = I at init -> y' = y to bit-precision.
-  After the first gradient step the paired rows diverge and the chain becomes a
-  general orthogonal matrix; gradient flows into U from step 0 (no dead-grad).
-  Odd r is rejected (matches peft warning behaviour).
-
-OMITTED: paper also adds an orthogonality regularizer (Eq. 6 / Sec. 3.3),
-a loss-side term. Add it in your training loop if you want regularized HRA.
-
-Reference implementations (for review/cross-check):
-  - HRA paper authors (DaShenZi721/HRA), llama variant of OFT layer with HRA:
-    https://github.com/DaShenZi721/HRA/blob/master/llama/peft/oft/layer_GS_HRA.py
+Refs:
+  - paper code: https://github.com/DaShenZi721/HRA/blob/master/llama/peft/oft/layer_GS_HRA.py
     (offline: docs/refs/orig_hra_layer.py)
-  - peft HRA layer, reset_hra_parameters (lines 100-108):
-    https://github.com/huggingface/peft/blob/main/src/peft/tuners/hra/layer.py
+  - peft:       https://github.com/huggingface/peft/blob/main/src/peft/tuners/hra/layer.py
     (offline: docs/refs/peft_hra_layer.py)
 """
 import torch
@@ -63,10 +51,7 @@ class HRA:
 
     @staticmethod
     def init(layer: nn.Module, cfg) -> None:
-        # Symmetric init per peft (docs/refs/peft_hra_layer.py:101-108):
-        #   half = kaiming(r//2, d_in); U = repeat_interleave(half, 2, dim=0)
-        # Adjacent pairs (H_2k H_2k+1) cancel since H^2 = I, so R = I exactly,
-        # while gradient still flows into U from step 0.
+        # Symmetric init: kaiming(r//2, d_in) repeat-interleaved -> R = I, grad alive.
         with torch.no_grad():
             r, d_in = layer.lora_U.shape
             half = torch.empty(r // 2, d_in, dtype=layer.lora_U.dtype, device=layer.lora_U.device)
@@ -79,17 +64,7 @@ class HRA:
         layer: nn.Module,
         x: Float[T, '*B i'],
     ) -> Float[T, '*B i']:
-        """Apply x -> x R^T where R = H_0 H_1 ... H_{r-1}, H_i = I - 2 u_i u_i^T / ||u_i||^2.
-
-        peft applies `W @ R` so y = F.linear(x, W@R) = x @ R^T @ W^T. Our pre-hook
-        produces `x @ R^T = x @ H_{r-1} ... H_0`, then the base layer computes
-        `(x R^T) @ W^T = (x R^T W^T)`, matching peft (docs/refs/peft_hra_layer.py:225-264).
-
-        Iterate i = r-1 down to 0: each step right-multiplies x by H_i, building
-        x H_{r-1} H_{r-2} ... H_0 = x R^T.  At symmetric init H_{2k} H_{2k+1} = I
-        regardless of order, so identity-at-t=0 holds either way; the order only
-        matters once paired rows diverge.
-        """
+        """x -> x R^T = x H_{r-1} ... H_0. Iterate i = r-1 down to 0 to match peft."""
         U = layer.lora_U                                     # (r, d_in)
         Rx = x
         for i in range(U.shape[0] - 1, -1, -1):

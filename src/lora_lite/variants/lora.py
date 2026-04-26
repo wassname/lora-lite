@@ -2,12 +2,11 @@
 
     h = W x + (alpha/r) B A x
 
-Identity at t=0 from B=0. Faithful to the paper.
+Identity at t=0 from B=0.
 
-Reference implementations (for review/cross-check):
-  - peft Linear.update_layer + lora_A/B init, forward:
-    https://github.com/huggingface/peft/blob/main/src/peft/tuners/lora/layer.py
-    (see docs/refs/peft_lora_layer.py for offline copy)
+Refs:
+  - peft: https://github.com/huggingface/peft/blob/main/src/peft/tuners/lora/layer.py
+    (offline: docs/refs/peft_lora_layer.py)
 """
 from einops import einsum
 from jaxtyping import Float
