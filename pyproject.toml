@@ -2,14 +2,28 @@
 name = "lora-lite"
 version = "0.0.1"
 description = "Hackable forward-hook LoRA. ~600 LoC. One file per variant."
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.1",
     "einops>=0.7",
-    "jaxtyping>=0.2.25",
+]
+keywords = ["lora", "pytorch", "peft", "adapters", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
+[project.urls]
+Homepage = "https://github.com/wassname/lora-lite"
+Repository = "https://github.com/wassname/lora-lite"
+Issues = "https://github.com/wassname/lora-lite/issues"
+
 [project.optional-dependencies]
+build = ["twine>=6"]
 test = ["pytest", "tabulate"]
 hf-test = ["accelerate>=1.6", "safetensors>=0.5", "transformers>=4.51"]
 

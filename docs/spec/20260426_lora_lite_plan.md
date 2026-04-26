@@ -108,6 +108,45 @@ Failure-mode interpretation:
 - If adapter grads were absent, `grad` or `dθ` would be 0/non-finite.
 - If save/load were broken, adapter tensor equality or reload logit error would fail.
 
+## 2026-04-26 publishable workflow pass
+
+Goal: make the repo behave like a small buildable library without adding framework surface area.
+
+### Scope
+
+In:
+
+- Keep minimal functional integration tests as the default proof path.
+- Add a GitHub CI hook for fast tests and package build.
+- Add a `pueue` recipe for the larger Qwen proof.
+- Tighten README structure so install, quickstart, core idea, tests, and status are easy to find.
+
+Out:
+
+- PyPI publishing token/workflow. Publishing should wait until the license decision is explicit.
+- Implementing every named adapter variant in one pass. That would add complexity faster than tests can explain it.
+
+### Requirements and evidence
+
+| Requirement | Distinguishing check | Evidence |
+|---|---|---|
+| R7: fast CI catches broken tests/builds | `just check` must run pytest, smoke, `uv build`, and `twine check`; a broken test, wheel, sdist, or README metadata fails the hook. | `just check` -> pytest `8 passed in 9.53s`, smoke all pass, wheel/sdist built, `twine check dist/*` passed |
+| R8: large proof is queued, not hidden in CI | `just qwen-queue` must create a pueue task in the repo cwd with why/resolve label and intended Qwen command. | `just qwen-queue && pueue status` -> task 74 queued at `/media/wassname/SGIronWolf/projects5/2026/lora-lite` with `just qwen-probe lora pissa delora 16` |
+| R9: README is publishable enough to judge | Reader sees install, quickstart, pseudocode core, testing commands, proof caveat before variant wishlist. | `README.md` reordered and human note removed |
+| R10: variant roadmap buys simplicity | Next variant is ranked by fit to current hook contract; non-hook variants are deferred rather than half-supported. | this section |
+
+Fresh review first blocked on weak `qwen-queue` evidence and README citation/comment junk. Fixes: queued real pueue task 74, added `twine check`, fenced citation, removed the stray README note. Final fresh review verdict: PASS.
+
+### Adapter roadmap, ranked by simplicity
+
+| Variant | Why it fits or waits | Next check |
+|---|---|---|
+| IA3 | Multiplicative vector on activations. Probably the smallest new file and no base-weight mutation. | Identity with ones, perturb changes output, loss drops, save/load exact. |
+| DoRA | Fits additive hook for fp layers; bnb norm handling must be explicit or fail-fast. | fp smoke first; quantized proof only after norm semantics are obvious. |
+| SSVD / PiSSA-family | Fits current `weight`-SVD pattern and teaches the SVD adapter path. | Reconstruction/identity invariant plus train proof. |
+| HRA / OFT / ROAD | Interesting, but likely wants orthogonal or weight-transform semantics. Keep until hook-only formulation is clear. | Pseudocode first, then one invariant that distinguishes real rotation from dead code. |
+| S-steer / AntiPaSTO | Research adapters. Should use `group_init` and activation evidence, not be squeezed into plain LoRA tests. | Calibration is consumed, hooks removed, load does not need calibration data. |
+
 ## Review history
 
 A cold subagent review first returned `PASS_WITH_BLOCKERS`:

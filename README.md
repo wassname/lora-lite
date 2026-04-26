@@ -2,24 +2,7 @@
 
 A hackable, single-file-per-variant LoRA library built on PyTorch forward hooks.
 
-<!-- Human this is too long! should be into, code, procedure to get started. why, what is it, an example of a hackable adapter, then minimal features, how to install and use, and links/citation -->
-
-- ~600 LoC total
-- One file per variant, ~50 LoC each
-- No module replacement, no merge/unmerge, no PEFT config soup
-- Save = `torch.save({cfg, state_dict_filtered_by_'lora_'})`
-- LoRA/DeLoRA forward hooks work with `nn.Linear` and bnb-style `Linear{4bit,8bitLt}` modules that expose `in_features`, `out_features`, and `weight`.
-- PiSSA is fp-only in v1 because it mutates `weight` into `W_res`; quantized PiSSA needs explicit dequantize/requantize.
-
-Currently shipped variants:
-
-| Variant | Class | File |
-|---|---|---|
-| LoRA | A (additive) | [src/lora_lite/variants/lora.py](src/lora_lite/variants/lora.py) |
-| PiSSA ([Meng+ 2024](https://arxiv.org/abs/2404.02948)) | A + B (special init mutates W) | [src/lora_lite/variants/pissa.py](src/lora_lite/variants/pissa.py) |
-| DeLoRA ([Bini+ 2025](https://arxiv.org/abs/2503.18225)) | A (additive, normalised) | [src/lora_lite/variants/delora.py](src/lora_lite/variants/delora.py) |
-
-See [docs/spec/20260426_lora_lite_plan.md](docs/spec/20260426_lora_lite_plan.md) for goals, status, TODOs, and the current design plan. The original broader design was stress-tested against the [adapters_as_hypotheses](https://github.com/wassname/adapters_as_hypotheses) catalog (~26/27 variants covered with 3 small API tweaks).
+The goal is not to be PEFT-compatible. The goal is to make adapter ideas easy to read, edit, test, and throw away.
 
 ## Install
 
@@ -34,24 +17,54 @@ import torch, lora_lite as ll
 
 model = MyTransformer()  # any nn.Module containing linear-like children
 cfg = ll.LoraLiteConfig(variant="lora", r=8, alpha=16, dtype=torch.bfloat16)
-handles = ll.attach(model, cfg)
+ll.attach(model, cfg)
 
-# train
-trainable = [p for p in model.parameters() if p.requires_grad]
-opt = torch.optim.AdamW(trainable, lr=1e-4)
-# ... your loop ...
+opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-4)
+# train...
 
 ll.save(model, "adapter.pt")
 ll.detach(model)
-# later:
 ll.load(model, "adapter.pt")
 ```
 
-Inspect a tensor live:
+Inspect a live adapter tensor directly:
 
 ```python
-A = model.layers[5].self_attn.q_proj.lora_A   # just an nn.Parameter
+A = model.layers[5].self_attn.q_proj.lora_A
 ```
+
+## Core idea
+
+Each variant owns the adapter math. The runtime only finds target layers, attaches `lora_*` parameters, registers hooks, and saves full-path adapter keys.
+
+```python
+def attach(model, cfg):
+    targets ← find_linear_like_modules(model, cfg)
+    freeze(model.parameters())
+    for name, layer in targets:
+        layer.lora_* ← variant.param_specs(layer, cfg)
+        hook(layer, lambda x, y: variant.forward(layer, x, y))
+
+def save(model, path):
+    torch.save({"cfg": cfg, "state": state_dict_keys_containing("lora_")}, path)
+```
+
+Minimal by design:
+
+- One file per variant.
+- No module replacement, merge/unmerge, mixed-adapter batches, or PEFT config soup.
+- LoRA/DeLoRA hooks work with `nn.Linear` and bnb-style `Linear{4bit,8bitLt}` modules that expose `in_features`, `out_features`, and `weight`.
+- PiSSA is fp-only because it mutates `weight` into `W_res`; quantized PiSSA should fail loudly until dequantize/requantize is explicit.
+
+Currently shipped variants:
+
+| Variant | Class | File |
+|---|---|---|
+| LoRA | A (additive) | [src/lora_lite/variants/lora.py](src/lora_lite/variants/lora.py) |
+| PiSSA ([Meng+ 2024](https://arxiv.org/abs/2404.02948)) | A + B (special init mutates W) | [src/lora_lite/variants/pissa.py](src/lora_lite/variants/pissa.py) |
+| DeLoRA ([Bini+ 2025](https://arxiv.org/abs/2503.18225)) | A (additive, normalised) | [src/lora_lite/variants/delora.py](src/lora_lite/variants/delora.py) |
+
+See [docs/spec/20260426_lora_lite_plan.md](docs/spec/20260426_lora_lite_plan.md) for goals, status, and the current design plan. The original broader design was stress-tested against the [adapters_as_hypotheses](https://github.com/wassname/adapters_as_hypotheses) catalog (~26/27 variants covered with 3 small API tweaks).
 
 ## Targeting
 
@@ -137,9 +150,10 @@ class ActSVD:
 ## Smoke test
 
 ```bash
+just check       # pytest + smoke + package build
 just test
 just smoke
-just qwen-probe
+just qwen-queue  # queued Qwen/Qwen3-0.6B proof via pueue
 ```
 
 `just test` verifies, for each of `lora`, `pissa`, `delora`:
@@ -161,6 +175,8 @@ just qwen-probe
 
 This is an interface/training proof, not a benchmark: exact Qwen target names, hook activity, lora-only gradients, loss decrease, adapter tensor save/load, and reload equivalence on a 0.6B HF model.
 
+CI runs `just check` on GitHub. The larger Qwen proof stays in `pueue` because it needs the shared GPU.
+
 ## What's NOT in v1
 
 | Feature | Why dropped |
@@ -176,4 +192,15 @@ This is an interface/training proof, not a benchmark: exact Qwen target names, h
 
 ## Status
 
-v0.0.1: lora + pissa + delora + smoke test. See spec for next variants (DoRA, VeRA, SSVD).
+v0.0.1: LoRA + PiSSA + DeLoRA + minimal functional tests + Qwen proof. Next likely variants are IA3 or DoRA because they fit the current hook contract with little new machinery. OFT/ROAD/AntiPaSTO-style methods are more interesting, but should wait until the simple hook family is boring.
+
+## Citation
+
+```bibtex
+@misc{wassname2026loralite,
+  title = {LoRA-Lite: A Hackable Adapter Library for Research},
+  author = {Michael J. Clark},
+  year = {2026},
+  url = {https://github.com/wassname/lora-lite/}
+}
+```
