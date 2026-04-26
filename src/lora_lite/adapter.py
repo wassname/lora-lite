@@ -20,6 +20,14 @@ def _hook(layer, args, y):
     return out.to(y.dtype)
 
 
+def _pre_hook(layer, args):
+    (x,) = args
+    cfg: LoraLiteConfig = layer._lora_cfg
+    x_cast = x.to(cfg.dtype)
+    x_new = layer._lora_variant.forward_input(layer, x_cast)
+    return (x_new.to(x.dtype),)
+
+
 def attach(model: nn.Module, cfg: LoraLiteConfig, calibration_data=None) -> list[RemovableHandle]:
     if cfg.variant not in REGISTRY:
         raise KeyError(f"unknown variant {cfg.variant!r}; registered: {list(REGISTRY)}")
@@ -54,7 +62,10 @@ def attach(model: nn.Module, cfg: LoraLiteConfig, calibration_data=None) -> list
         group_init(model, attached_targets, cfg, calibration_data)
 
     for _, layer, _ in attached_targets:
-        handles.append(layer.register_forward_hook(_hook))
+        if hasattr(layer._lora_variant, "forward_input"):
+            handles.append(layer.register_forward_pre_hook(_pre_hook))
+        else:
+            handles.append(layer.register_forward_hook(_hook))
 
     setattr(model, _ATTACHED_ATTR, {"cfg": cfg, "targets": attached_names, "handles": handles})
     return handles

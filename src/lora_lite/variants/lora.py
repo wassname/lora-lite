@@ -1,4 +1,9 @@
-"""Vanilla LoRA. Reference variant. y = Wx + (alpha/r) * B @ A @ x."""
+"""Vanilla LoRA. Hu et al. 2021  https://arxiv.org/abs/2106.09685
+
+    h = W x + (alpha/r) B A x
+
+Identity at t=0 from B=0. Faithful to the paper.
+"""
 from einops import einsum
 from torch import nn
 import torch

@@ -1,4 +1,22 @@
-"""IA3-style output gating. y_new = y * g, with g initialized to ones."""
+"""IA3-style output gating. Liu et al. 2022  https://arxiv.org/abs/2205.05638
+
+    y_new = y * g,    g initialized to 1  (identity at t=0)
+
+DEVIATION FROM PAPER:
+    The original IA3 gates only three positions per transformer block:
+        l_k * (k_proj output),  l_v * (v_proj output),  l_ff * (FFN intermediate after activation)
+    This implementation gates ANY linear layer the targeting system selects.
+    To match the paper exactly on a typical Llama/Qwen-style block, attach with:
+
+        cfg = LoraLiteConfig(
+            variant="ia3",
+            target_names=(r"\\.k_proj$", r"\\.v_proj$", r"\\.up_proj$"),
+            target_roles=(),
+        )
+
+    `up_proj` is the closest stand-in for "FFN intermediate" in gated-MLP blocks
+    (Llama uses gate * up; gating the up branch is the IA3-spirit choice).
+"""
 import torch
 from torch import nn
 

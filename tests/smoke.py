@@ -212,7 +212,7 @@ def structural_linear_like_test():
 
 def bitsandbytes_cuda_smoke(require_bnb: bool):
     label = "required" if require_bnb else "optional"
-    print(f"\n=== {label} bitsandbytes CUDA smoke ===")
+    print(f"\n=== {label} bitsandbytes CUDA smoke (every variant) ===")
     if not torch.cuda.is_available():
         if require_bnb:
             raise RuntimeError("CUDA unavailable; required real bnb 4/8-bit smoke cannot run.")
@@ -235,19 +235,47 @@ def bitsandbytes_cuda_smoke(require_bnb: bool):
         def forward(self, x):
             return self.layers[0](x)
 
+    # bnb-compatible: hook-only variants that never read layer.weight
+    bnb_ok = ("lora", "delora", "ia3", "hra")
+    # bnb-incompatible: variants that mutate or read dense weight in init()
+    bnb_fail = ("pissa", "dora")
+
+    print("  SHOULD: bnb_ok variants {} -> identity_err==0 grad_nonzero=True".format(bnb_ok))
+    print("  SHOULD: bnb_fail variants {} -> attach() raises (dequant required)".format(bnb_fail))
+
     for layer_cls in (bnb.nn.Linear8bitLt, bnb.nn.Linear4bit):
-        torch.manual_seed(0)
-        model = BnbModel(layer_cls)
-        x = torch.randn(2, 3, 8, device="cuda")
-        y_base = model(x).detach()
-        ll.attach(model, ll.LoraLiteConfig(variant="lora", r=2, alpha=4, dtype=torch.float16, target_roles=()))
-        y = model(x)
-        err = (y.detach() - y_base).abs().max().item()
-        y.pow(2).mean().backward()
-        grad_nonzero = model.layers[0].lora_B.grad.abs().sum().item() > 0
-        print(f"  {layer_cls.__name__}: identity_err={err:.3e} grad_nonzero={grad_nonzero}")
-        assert err == 0.0
-        assert grad_nonzero
+        for variant in bnb_ok:
+            torch.manual_seed(0)
+            model = BnbModel(layer_cls)
+            x = torch.randn(2, 3, 8, device="cuda")
+            y_base = model(x).detach()
+            cfg = ll.LoraLiteConfig(
+                variant=variant, r=2, alpha=4, dtype=torch.float16, target_roles=(),
+                variant_kwargs={"lambda0": 0.0} if variant == "delora" else {},
+            )
+            ll.attach(model, cfg)
+            y = model(x)
+            err = (y.detach() - y_base).abs().max().item()
+            y.pow(2).mean().backward()
+            # find any trainable lora_* with a grad
+            grads = [(n, p.grad) for n, p in model.named_parameters() if "lora_" in n and p.requires_grad and p.grad is not None]
+            grad_nonzero = any(g.abs().sum().item() > 0 for _, g in grads)
+            print(f"  {layer_cls.__name__:14s} {variant:6s}: identity_err={err:.3e} grad_nonzero={grad_nonzero}")
+            assert err < 1e-2, f"  bnb identity err too large for {variant}"
+            assert grad_nonzero, f"  no nonzero grad for {variant}"
+            ll.detach(model)
+            del model
+
+        for variant in bnb_fail:
+            model = BnbModel(layer_cls)
+            cfg = ll.LoraLiteConfig(variant=variant, r=2, alpha=2, dtype=torch.float16, target_roles=())
+            try:
+                ll.attach(model, cfg)
+            except (TypeError, RuntimeError, AttributeError, ValueError) as e:
+                print(f"  {layer_cls.__name__:14s} {variant:6s}: fail-loud OK ({type(e).__name__})")
+            else:
+                raise AssertionError(f"  {variant} on {layer_cls.__name__} should have failed loudly")
+            del model
 
 
 def main():

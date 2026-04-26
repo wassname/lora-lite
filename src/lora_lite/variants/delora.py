@@ -1,8 +1,18 @@
-"""DeLoRA: column-normalised A, B, scaled by lambda/r. Bini et al. 2025  arXiv:2503.18225.
+"""DeLoRA: column-normalised A, B, scaled by lambda * ||W||_F / r.
 
-NOTE on identity at t=0: paper uses kaiming for both A and B with a learned lambda
-init at 0 (or small) so the effective delta starts near zero. We honour that:
+Bini et al. 2025  https://arxiv.org/abs/2503.18225
+
+Paper Eq. 8:    W' = W + (lambda * ||W||_F / r) B Xi A
+where Xi_{i,i} = 1 / (||b_i|| ||a_i||) makes each rank-1 component unit-norm.
+This is equivalent to row-normalising A and column-normalising B (each column of
+B and row of A has unit norm), so each rank-1 outer product b_i a_i^T has unit
+spectral norm -> the whole low-rank update is bounded.
+
+Identity at t=0: paper uses kaiming init for both A and B with `lambda` initialised
+to 0 (or small) so the effective delta starts near zero. We honour that:
 default lambda0 == 0 gives bit-identity; user can override via variant_kwargs.
+
+The frozen ||W||_F factor is captured once at init() into a buffer `lora_wnorm`.
 """
 import torch
 import torch.nn.functional as F
@@ -25,19 +35,26 @@ class DeLoRA:
             "lora_lambda": ParamSpec(
                 (), init=lambda t: t.fill_(lam0), trainable=True
             ),
+            # ||W||_F captured at init; frozen scalar buffer (no grad)
+            "lora_wnorm": ParamSpec((), init="zeros", trainable=False),
         }
 
     @staticmethod
     def init(layer: nn.Linear, cfg) -> None:
+        # Reading layer.weight only works for plain Linear; for bnb layers this
+        # dequantizes via .float() round-trip if available, or fails cleanly.
+        with torch.no_grad():
+            W = layer.weight.data.float()
+            layer.lora_wnorm.data.fill_(W.norm().item())
         return
 
     @staticmethod
     def forward(layer: nn.Linear, x, y):
         cfg = layer._lora_cfg
-        # rows of A unit, cols of B unit (per paper)
+        # rows of A unit, cols of B unit (per paper, equivalent to Xi)
         A = F.normalize(layer.lora_A, dim=1)              # (r, d_in)
         B = F.normalize(layer.lora_B, dim=0)              # (d_out, r)
-        scale = layer.lora_lambda / cfg.r
+        scale = layer.lora_lambda * layer.lora_wnorm / cfg.r
         h = einsum(x, A, "... i, r i -> ... r")
         delta = einsum(h, B, "... r, o r -> ... o")
         return y + scale * delta
