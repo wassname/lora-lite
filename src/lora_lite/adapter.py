@@ -28,7 +28,7 @@ def _pre_hook(layer, args):
     return (x_new.to(x.dtype),)
 
 
-def attach(model: nn.Module, cfg: LoraLiteConfig, calibration_data=None) -> list[RemovableHandle]:
+def attach(model: nn.Module, cfg: LoraLiteConfig, calibration_data=None, *, _skip_group_init: bool = False) -> list[RemovableHandle]:
     if cfg.variant not in REGISTRY:
         raise KeyError(f"unknown variant {cfg.variant!r}; registered: {list(REGISTRY)}")
     variant = REGISTRY[cfg.variant]
@@ -62,7 +62,7 @@ def attach(model: nn.Module, cfg: LoraLiteConfig, calibration_data=None) -> list
         attached_targets.append((name, layer, role))
 
     group_init = getattr(variant, "group_init", None)
-    if group_init is not None:
+    if group_init is not None and not _skip_group_init:
         group_init(model, attached_targets, cfg, calibration_data)
 
     for _, layer, _ in attached_targets:
@@ -132,7 +132,7 @@ def save(model: nn.Module, path: str) -> None:
 def load(model: nn.Module, path: str) -> list[RemovableHandle]:
     blob = torch.load(path, weights_only=True, map_location="cpu")
     cfg = LoraLiteConfig.from_dict(blob["cfg"])
-    handles = attach(model, cfg)  # creates empty params with right shapes
+    handles = attach(model, cfg, _skip_group_init=True)  # creates empty params; data-driven inits restored from state_dict
     missing, unexpected = model.load_state_dict(blob["state"], strict=False)
     expected_lora = {k for k in model.state_dict() if "lora_" in k}
     missing_lora = sorted(expected_lora.intersection(missing))

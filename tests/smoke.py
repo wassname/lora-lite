@@ -309,6 +309,24 @@ def eva_smoke():
     assert all(n > 0 for n in a_norms), "EVA lora_A buffers all zero -> group_init never ran"
     print(f"  SHOULD: lora_A buffers populated. PASS (mean ||A||={sum(a_norms)/len(a_norms):.3f}).")
 
+    # save/load round-trip WITHOUT calibration data on load (load path uses _skip_group_init)
+    ARTIFACT_DIR.mkdir(exist_ok=True)
+    p = ARTIFACT_DIR / "eva_smoke_adapter.pt"
+    ll.save(model, str(p))
+    ll.detach(model)
+    torch.manual_seed(0)
+    model2 = TinyModel().to(torch.float32)
+    ll.load(model2, str(p))   # must NOT require calibration_data
+    with torch.no_grad():
+        y_loaded = model2(ids)
+    err2 = (y_loaded - y_adapt).abs().max().item()
+    print(f"  save/load (no calibration on load): max err = {err2:.3e}")
+    assert err2 < 1e-6, f"EVA save/load mismatch {err2}"
+    print("  SHOULD: load without calibration_data works (uses _skip_group_init). PASS.")
+    ll.detach(model2)
+    # re-attach model for training section below
+    ll.attach(model, cfg, calibration_data=calib)
+
     # gradient flow: only B trains
     target = torch.randn(2, 16, 100, dtype=torch.float32) * 0.1
     trainable = [p for p in model.parameters() if p.requires_grad]
@@ -328,6 +346,36 @@ def eva_smoke():
     ll.detach(model)
 
 
+def dora_bias_smoke():
+    """V3 review caught: DoRA was scaling bias by m/||V||. Fixed; bias passes through."""
+    print("\n=== dora bias passthrough (V3 fix) ===")
+    torch.manual_seed(0)
+    d = 16
+    layer = nn.Linear(d, d, bias=True).to(torch.float32)
+    x = torch.randn(2, d)
+    y_base = layer(x).detach()
+
+    class Wrap(nn.Module):
+        def __init__(self, lin):
+            super().__init__()
+            self.config = type("Cfg", (), {"hidden_size": d})()
+            self.layers = nn.ModuleList([lin])
+
+        def forward(self, x):
+            return self.layers[0](x)
+
+    model = Wrap(layer)
+    cfg = ll.LoraLiteConfig(variant="dora", r=2, alpha=4, dtype=torch.float32, target_roles=())
+    ll.attach(model, cfg)
+    with torch.no_grad():
+        y_adapt = model(x)
+    err = (y_adapt - y_base).abs().max().item()
+    print(f"  identity with bias=True: max err = {err:.3e}")
+    assert err < 1e-5, f"DoRA bias-passthrough broken: err {err} (likely bias being scaled)"
+    print("  SHOULD: identity err < 1e-5 even with bias. PASS.")
+    ll.detach(model)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--require-bnb", action="store_true")
@@ -336,6 +384,7 @@ def main():
     for v in ("lora", "pissa", "delora", "ia3", "dora", "hra", "antipasto"):
         variant_test(v, dtype=torch.float32)
     eva_smoke()
+    dora_bias_smoke()
     structural_linear_like_test()
     bitsandbytes_cuda_smoke(args.require_bnb)
     print("\nALL PASS.")

@@ -59,8 +59,12 @@ class DoRA:
         BA = einsum(layer.lora_B, layer.lora_A, "o r, r i -> o i")
         V = layer.weight + scale * BA                          # (d_out, d_in)
         v_norm = V.norm(dim=1).clamp_min(1e-12)                # (d_out,)
-        # y' = (m / ||V||_c) * (Wx + scale * BAx) = (m / ||V||_c) * (y + scale * BAx)
+        # Bias passes through UNSCALED -- only Wx + scale*BAx is normalized.
+        # Matches peft DoRA forward (docs/refs/peft_lora_dora.py:157-161).
+        bias = getattr(layer, "bias", None)
+        wx = y if bias is None else (y - bias)
         h = einsum(x, layer.lora_A, "... i, r i -> ... r")
         delta = einsum(h, layer.lora_B, "... r, o r -> ... o")
-        combined = y + scale * delta
-        return (layer.lora_m / v_norm) * combined
+        combined = wx + scale * delta
+        out = (layer.lora_m / v_norm) * combined
+        return out if bias is None else out + bias

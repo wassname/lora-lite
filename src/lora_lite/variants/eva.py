@@ -61,12 +61,14 @@ class EVA:
 
     @staticmethod
     def group_init(model: nn.Module, targets, cfg, calibration_data) -> None:
+        # adapter.load() passes _skip_group_init=True so this is only called on
+        # the live attach path where calibration_data is required.
         if calibration_data is None:
             raise ValueError(
                 "EVA requires calibration_data: an iterable of model inputs "
-                "(dicts of kwargs to model.forward, or single tensors) used to "
-                "estimate the input PCA per layer. Pass via "
-                "lora_lite.attach(model, cfg, calibration_data=batches)."
+                "(dicts of kwargs to model.forward, tuples of positional args, "
+                "or single tensors) used to estimate the per-layer input PCA. "
+                "Pass via lora_lite.attach(model, cfg, calibration_data=batches)."
             )
         # Collect input activations per target via forward hooks.
         layers = {name: layer for name, layer, _ in targets}
