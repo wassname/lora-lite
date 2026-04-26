@@ -1,7 +1,8 @@
 """AntiPaSTO: SVD steering with learnable singular-value deltas + block-diagonal Cayley rotation.
 
-Lite port of wassname's AntiPaSTO3 SVD adapter (research code, not an
-upstream peft variant). Reference:
+Paper: https://arxiv.org/pdf/2601.07473  (wassname, AntiPaSTO -- SVD-based PEFT)
+Repo:  https://github.com/wassname/AntiPaSTO
+Lite port of the AntiPaSTO3 SVD adapter from
   https://github.com/wassname/antipasto3 (offline: docs/refs/antipasto3_svd_adapter.py)
 
 Decomposition (PyTorch nn.Linear convention, weight (d_out, d_in)):

@@ -50,10 +50,13 @@ class EVA:
     @staticmethod
     def param_specs(d_in, d_out, cfg):
         return {
-            # A is frozen (set in group_init from calibration data); kept as a
-            # buffer so it travels with state_dict and is not optimized.
-            "lora_A": ParamSpec((cfg.r, d_in), init="zeros", trainable=False, as_buffer=True),
-            # B is the only trainable bit; zero-init -> identity at t=0.
+            # A is trainable Parameter (peft semantics): EVA only changes the INIT.
+            # peft copies SVD vectors into the LoRA A weight, which remains a regular
+            # nn.Linear.weight Parameter (docs/refs/peft_eva.py:529).
+            # On step 0 only B has nonzero grad (delta=0 since B=0); A starts moving
+            # once B becomes nonzero, same gradient pattern as DeLoRA.
+            "lora_A": ParamSpec((cfg.r, d_in), init="zeros", trainable=True),
+            # B is zero-init -> identity at t=0.
             "lora_B": ParamSpec((d_out, cfg.r), init="zeros", trainable=True),
         }
 
@@ -115,7 +118,8 @@ class EVA:
             # full_matrices=False -> Vh shape (min(N,d_in), d_in); take top-r rows
             _, _, Vh = torch.linalg.svd(X, full_matrices=False)
             A = Vh[: cfg.r, :].to(layer.lora_A.dtype).to(layer.lora_A.device)
-            layer.lora_A.copy_(A)
+            with torch.no_grad():
+                layer.lora_A.copy_(A)
 
     @staticmethod
     def forward(

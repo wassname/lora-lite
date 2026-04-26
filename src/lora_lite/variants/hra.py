@@ -71,10 +71,20 @@ class HRA:
         layer: nn.Module,
         x: Float[T, '*B i'],
     ) -> Float[T, '*B i']:
-        """Apply Rx where R = prod_i H_i, H_i = I - 2 u_i u_i^T / ||u_i||^2."""
+        """Apply x -> x R^T where R = H_0 H_1 ... H_{r-1}, H_i = I - 2 u_i u_i^T / ||u_i||^2.
+
+        peft applies `W @ R` so y = F.linear(x, W@R) = x @ R^T @ W^T. Our pre-hook
+        produces `x @ R^T = x @ H_{r-1} ... H_0`, then the base layer computes
+        `(x R^T) @ W^T = (x R^T W^T)`, matching peft (docs/refs/peft_hra_layer.py:225-264).
+
+        Iterate i = r-1 down to 0: each step right-multiplies x by H_i, building
+        x H_{r-1} H_{r-2} ... H_0 = x R^T.  At symmetric init H_{2k} H_{2k+1} = I
+        regardless of order, so identity-at-t=0 holds either way; the order only
+        matters once paired rows diverge.
+        """
         U = layer.lora_U                                     # (r, d_in)
         Rx = x
-        for i in range(U.shape[0]):
+        for i in range(U.shape[0] - 1, -1, -1):
             u = U[i]                                         # (d_in,)
             sq = (u * u).sum().clamp_min(1e-12)
             coeff = einsum(Rx, u, "... i, i -> ...") * (2.0 / sq)

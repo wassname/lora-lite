@@ -48,26 +48,32 @@ def assert_no_base_grads(model: torch.nn.Module) -> None:
 
 
 def perturb_first_adapter(model: torch.nn.Module) -> None:
-    for name, p in model.named_parameters():
-        if "lora_lambda" in name:
-            with torch.no_grad():
-                p.add_(0.25)
-            return
-    for name, p in model.named_parameters():
-        if "lora_gate" in name:
-            with torch.no_grad():
-                p.add_(0.25)
-            return
-    for name, p in model.named_parameters():
-        if "lora_B" in name:
-            with torch.no_grad():
-                p.flatten()[0].add_(0.25)
-            return
-    for name, p in model.named_parameters():
-        if "lora_g" in name:
-            with torch.no_grad():
-                p.flatten()[0].add_(0.25)
-            return
+    """Nudge one trainable adapter parameter so forward output changes.
+
+    Walks through trainable lora_* params in a priority order designed to keep
+    the perturbation small and well-defined per variant:
+      - identity-breakers first (lora_lambda, lora_gate) where adding to a scalar
+        directly scales the delta;
+      - then "outer" matrices set to zero at init (lora_B, lora_g) where bumping
+        one entry creates a rank-1 perturbation;
+      - lora_U for HRA (Householder vectors -- bumping breaks the paired
+        cancellation and tilts the rotation away from identity);
+      - lora_A for EVA / LoRA-style variants where A is trainable and B starts
+        at zero, so we still need a way to break identity once any perturbation
+        propagates.
+    """
+    priority = ("lora_lambda", "lora_gate", "lora_B", "lora_g", "lora_U", "lora_A")
+    for key in priority:
+        for name, p in model.named_parameters():
+            if not p.requires_grad:
+                continue
+            if key in name:
+                with torch.no_grad():
+                    if p.ndim == 0:
+                        p.add_(0.25)
+                    else:
+                        p.flatten()[0].add_(0.25)
+                return
     raise AssertionError("no perturbable adapter parameter found")
 
 

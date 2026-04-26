@@ -47,8 +47,12 @@ class DeLoRA:
     def param_specs(d_in, d_out, cfg):
         lam0 = float(cfg.variant_kwargs.get("lambda0", 0.0))
         return {
+            # peft DeLoRA default: A=kaiming, B=zeros (docs/refs/peft_delora_layer.py:138-140).
+            # Identity at t=0 from B=0 -> delta=0 regardless of lambda. With B=0 the
+            # delta is a function of B alone on step 0; gradient flows into B (nonzero)
+            # and into A only after B becomes nonzero (step 2+). Matches peft.
             "lora_A": ParamSpec((cfg.r, d_in), init="kaiming", trainable=True),
-            "lora_B": ParamSpec((d_out, cfg.r), init="kaiming", trainable=True),
+            "lora_B": ParamSpec((d_out, cfg.r), init="zeros",   trainable=True),
             "lora_lambda": ParamSpec(
                 (), init=lambda t: t.fill_(lam0), trainable=True
             ),
@@ -59,8 +63,11 @@ class DeLoRA:
 
     @staticmethod
     def init(layer: nn.Module, cfg) -> None:
-        # Reading layer.weight only works for plain Linear; for bnb layers this
-        # dequantizes via .float() round-trip if available, or fails cleanly.
+        # DeLoRA needs ||W||_2 per input column. Plain nn.Linear: just read weight.
+        # bnb Linear8bitLt: weight is fp16 until first forward (then int8 + SCB),
+        # so capturing here works; quality is correct only because we read pre-quant.
+        # bnb Linear4bit / fully quantized layers: would give garbage. Use lora/ia3/hra
+        # for those.
         with torch.no_grad():
             W = layer.weight.data.float()
             wnorm = W.norm(dim=0).detach().to(layer.lora_wnorm.dtype)
