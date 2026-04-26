@@ -1,4 +1,4 @@
-"""Smoke test: lora / pissa / delora on a tiny synthetic transformer-like model.
+"""Smoke test: current variants on a tiny synthetic transformer-like model.
 
 Verifies:
     1. Identity at t=0 (delta ~ 0, output close to base).
@@ -15,6 +15,7 @@ BLUF format:
     SHOULD: loss decreases > 5% over 20 SGD steps for all variants. ELSE grad/wiring bug.
 """
 from __future__ import annotations
+import argparse
 import os, sys, math
 from pathlib import Path
 import torch
@@ -128,6 +129,7 @@ def variant_test(variant: str, dtype=torch.float32):
         "lora": 1e-6,
         "pissa": 5e-4,    # SVD recon in fp32 is tight; bf16 would be ~1e-2
         "delora": 1e-6,   # lambda0=0
+        "ia3": 1e-6,
     }[variant] * max(1.0, base_scale)
     assert err < tol, f"  FAIL identity: err {err} > tol {tol}"
     print(f"  SHOULD: err<{tol:.1e}. PASS.")
@@ -165,7 +167,7 @@ def variant_test(variant: str, dtype=torch.float32):
     target = torch.randn(2, 16, 100, dtype=dtype) * 0.1
     trainable = [p for p in model.parameters() if p.requires_grad]
     # delora has tightly-normalised updates; use Adam with higher lr to see signal in 20 steps
-    if variant == "delora":
+    if variant in ("delora", "ia3"):
         opt = torch.optim.Adam(trainable, lr=1e-1)
     else:
         opt = torch.optim.SGD(trainable, lr=1e-2)
@@ -204,14 +206,19 @@ def structural_linear_like_test():
     print("  SHOULD: structural target attaches and lora_B receives grad. PASS.")
 
 
-def bitsandbytes_cuda_smoke():
-    print("\n=== optional bitsandbytes CUDA smoke ===")
+def bitsandbytes_cuda_smoke(require_bnb: bool):
+    label = "required" if require_bnb else "optional"
+    print(f"\n=== {label} bitsandbytes CUDA smoke ===")
     if not torch.cuda.is_available():
+        if require_bnb:
+            raise RuntimeError("CUDA unavailable; required real bnb 4/8-bit smoke cannot run.")
         print("  SKIP: CUDA unavailable; real bnb 4/8-bit forward needs GPU on this machine.")
         return
     try:
         import bitsandbytes as bnb
     except ImportError:
+        if require_bnb:
+            raise RuntimeError("bitsandbytes unavailable; install the bnb-test extra.")
         print("  SKIP: bitsandbytes unavailable.")
         return
 
@@ -240,10 +247,14 @@ def bitsandbytes_cuda_smoke():
 
 
 def main():
-    for v in ("lora", "pissa", "delora"):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--require-bnb", action="store_true")
+    args = parser.parse_args()
+
+    for v in ("lora", "pissa", "delora", "ia3"):
         variant_test(v, dtype=torch.float32)
     structural_linear_like_test()
-    bitsandbytes_cuda_smoke()
+    bitsandbytes_cuda_smoke(args.require_bnb)
     print("\nALL PASS.")
 
 

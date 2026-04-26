@@ -36,8 +36,9 @@ The core bet is that adapter variants should own the relationship between `(x, l
 | LoRA | done | `src/lora_lite/variants/lora.py` |
 | PiSSA | done, fp-only | `src/lora_lite/variants/pissa.py` |
 | DeLoRA | done | `src/lora_lite/variants/delora.py` |
+| IA3 | done | `src/lora_lite/variants/ia3.py` |
 | Smoke tests | done | `tests/smoke.py` |
-| bnb minimal forward smoke | done | `Linear8bitLt` and `Linear4bit` pass on CUDA |
+| bnb minimal forward smoke | done | `Linear8bitLt` and `Linear4bit` pass on CUDA with `just bnb-smoke` |
 
 ## Current smoke evidence
 
@@ -51,6 +52,8 @@ Last verified log: `/home/wassname/.cache/agent-tmp/lora_lite_smoke_after_review
 | PiSSA loss drop | `11.5%` |
 | DeLoRA identity | `0.000e+00` |
 | DeLoRA loss drop | `93.4%` |
+| IA3 identity | `0.000e+00` |
+| IA3 loss drop | `88.7%` |
 | fake non-`nn.Linear` target | attaches, identity `0.000e+00`, grad nonzero |
 | bnb `Linear8bitLt` | identity `0.000e+00`, grad nonzero |
 | bnb `Linear4bit` | identity `0.000e+00`, grad nonzero |
@@ -64,6 +67,7 @@ Goal: upgrade from smoke-tested sketch to evidence that the current PEFT-lite in
 In:
 
 - Pytest coverage for LoRA, PiSSA, and DeLoRA correctness invariants.
+- IA3 coverage as the first waiting-time simple adapter.
 - A real `Qwen/Qwen3-0.6B` probe that trains each current variant on layer-0 `q_proj` and `v_proj`.
 - Repeatable `just` recipes and workspace-local logs/artifacts.
 
@@ -130,18 +134,25 @@ Out:
 
 | Requirement | Distinguishing check | Evidence |
 |---|---|---|
-| R7: fast CI catches broken tests/builds | `just check` must run pytest, smoke, `uv build`, and `twine check`; a broken test, wheel, sdist, or README metadata fails the hook. | `just check` -> pytest `8 passed in 9.53s`, smoke all pass, wheel/sdist built, `twine check dist/*` passed |
-| R8: large proof is queued, not hidden in CI | `just qwen-queue` must create a pueue task in the repo cwd with why/resolve label and intended Qwen command. | `just qwen-queue && pueue status` -> task 74 queued at `/media/wassname/SGIronWolf/projects5/2026/lora-lite` with `just qwen-probe lora pissa delora 16` |
+| R7: fast CI catches broken tests/builds | `just check` must run pytest, smoke, `uv build`, and `twine check`; a broken test, wheel, sdist, or README metadata fails the hook. | `just check` -> pytest `10 passed in 4.10s`, smoke all pass, wheel/sdist built, `twine check dist/*` passed |
+| R8: large proof is queued, not hidden in CI | `just qwen-queue` must create a pueue task in the repo cwd with why/resolve label and intended Qwen command. | task 79 queued at `/media/wassname/SGIronWolf/projects5/2026/lora-lite` with `--variants lora pissa delora ia3 --steps 16` |
 | R9: README is publishable enough to judge | Reader sees install, quickstart, pseudocode core, testing commands, proof caveat before variant wishlist. | `README.md` reordered and human note removed |
 | R10: variant roadmap buys simplicity | Next variant is ranked by fit to current hook contract; non-hook variants are deferred rather than half-supported. | this section |
 
 Fresh review first blocked on weak `qwen-queue` evidence and README citation/comment junk. Fixes: queued real pueue task 74, added `twine check`, fenced citation, removed the stray README note. Final fresh review verdict: PASS.
 
+Follow-up after omega correction:
+
+- The recursive task failed previously because it was left as a passive sentinel instead of being expanded immediately after push.
+- Real bnb proof now runs through required `just bnb-smoke` with `bitsandbytes==0.49.2`; `Linear8bitLt` and `Linear4bit` both show identity error `0.000e+00` and nonzero adapter gradients. The command now fails instead of skipping if CUDA or bnb is unavailable.
+- IA3 was added while waiting for queued Qwen work: `just test` now has 10 tests, `just smoke` includes IA3, and pueue task 79 is queued for LoRA/PiSSA/DeLoRA/IA3 on Qwen 0.6B. Task 78 caught a quoting bug in `qwen-queue`; the recipe now queues a single `bash -lc` command.
+- README was reduced to prospective-user content; implementation notes moved to `docs/developer_guide.md`.
+
 ### Adapter roadmap, ranked by simplicity
 
 | Variant | Why it fits or waits | Next check |
 |---|---|---|
-| IA3 | Multiplicative vector on activations. Probably the smallest new file and no base-weight mutation. | Identity with ones, perturb changes output, loss drops, save/load exact. |
+| IA3 | Implemented. Multiplicative output vector, no base-weight mutation. | `just test` -> 10 tests passed; `just smoke` -> identity/save-load/loss drop passed. Qwen task 79 queued. |
 | DoRA | Fits additive hook for fp layers; bnb norm handling must be explicit or fail-fast. | fp smoke first; quantized proof only after norm semantics are obvious. |
 | SSVD / PiSSA-family | Fits current `weight`-SVD pattern and teaches the SVD adapter path. | Reconstruction/identity invariant plus train proof. |
 | HRA / OFT / ROAD | Interesting, but likely wants orthogonal or weight-transform semantics. Keep until hook-only formulation is clear. | Pseudocode first, then one invariant that distinguishes real rotation from dead code. |

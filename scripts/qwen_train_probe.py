@@ -58,6 +58,11 @@ def perturb_first_adapter(model: torch.nn.Module) -> None:
             with torch.no_grad():
                 p.flatten()[0].add_(0.25)
             return
+    for name, p in model.named_parameters():
+        if "lora_g" in name:
+            with torch.no_grad():
+                p.flatten()[0].add_(0.25)
+            return
     raise AssertionError("no perturbable adapter parameter found")
 
 
@@ -168,7 +173,7 @@ def run_variant(args, variant: str, input_ids: torch.Tensor, labels: torch.Tenso
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="Qwen/Qwen3-0.6B")
-    parser.add_argument("--variants", nargs="+", default=["lora", "pissa", "delora"])
+    parser.add_argument("--variants", nargs="+", default=["lora", "pissa", "delora", "ia3"])
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--torch-dtype", default="bfloat16")
     parser.add_argument("--steps", type=int, default=8)

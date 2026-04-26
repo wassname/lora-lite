@@ -26,6 +26,7 @@ Issues = "https://github.com/wassname/lora-lite/issues"
 build = ["twine>=6"]
 test = ["pytest", "tabulate"]
 hf-test = ["accelerate>=1.6", "safetensors>=0.5", "transformers>=4.51"]
+bnb-test = ["bitsandbytes>=0.46"]
 
 [build-system]
 requires = ["setuptools>=68"]
