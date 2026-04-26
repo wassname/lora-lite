@@ -38,6 +38,7 @@ The core bet is that adapter variants should own the relationship between `(x, l
 | DeLoRA | done | `src/lora_lite/variants/delora.py` |
 | IA3 | done | `src/lora_lite/variants/ia3.py` |
 | DoRA | done, fp-only | `src/lora_lite/variants/dora.py` |
+| HRA | done | `src/lora_lite/variants/hra.py` (output-side Householder, hook-only -> bnb-compatible) |
 | Smoke tests | done | `tests/smoke.py` |
 | bnb minimal forward smoke | done | `Linear8bitLt` and `Linear4bit` pass on CUDA with `just bnb-smoke` |
 
@@ -116,6 +117,7 @@ Follow-up tasks 80 (lora/pissa/delora/ia3 at 16 steps) and 81 (dora at 16 steps)
 | delora | 2 | 20482 | 0.3281 | 0.3125 | 5.261 | 4.823 | 8.322 | 0.06303 | 15.1 | 0 | `outputs/qwen_train_probe/delora_adapter.pt` |
 | ia3 | 2 | 3072 | 0 | 0.375 | 5.25 | 4.473 | 14.79 | 0.463 | 5.926 | 0 | `outputs/qwen_train_probe/ia3_adapter.pt` |
 | dora | 2 | 23552 | 0 | 0.3203 | 5.25 | 2.439 | 53.54 | 1.776 | 7.44 | 0 | `outputs/qwen_train_probe/dora_adapter.pt` |
+| hra | 2 | 12290 | 0 | 0.3438 | 5.25 | 4.07 | 22.47 | 0.05225 | 4.735 | 0 | `outputs/qwen_train_probe/hra_adapter.pt` |
 
 Failure-mode interpretation:
 

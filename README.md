@@ -46,7 +46,8 @@ See [docs/spec/20260426_lora_lite_plan.md](docs/spec/20260426_lora_lite_plan.md)
 | DeLoRA | yes | normalized additive adapter with learned scalar |
 | IA3 | yes | output gate initialized to ones |
 | DoRA | yes, fp only | reads dense `weight` for column-norm; quantized DoRA fails loudly |
-| SSVD / OFT / HRA / ROAD | no | planned after the hook-only invariant is clear |
+| HRA | yes | output-side Householder reflection with identity gate; works on bnb |
+| SSVD / OFT / ROAD | no | planned |
 | S-steer / AntiPaSTO | no | should use data-calibrated `group_init`, not plain LoRA tests |
 
 ## Targeting
