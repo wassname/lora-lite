@@ -1,0 +1,56 @@
+"""Variant protocol + registry. Variants own (x, layer.weight, layer.lora_*) -> y_new."""
+from dataclasses import dataclass
+from typing import Callable, Protocol, Any
+import torch
+from torch import nn
+
+from .config import LoraLiteConfig
+
+
+@dataclass
+class ParamSpec:
+    shape: tuple[int, ...]
+    init: str | Callable[[torch.Tensor], None] = "zeros"  # 'zeros'|'kaiming'|'ones'|callable(t)
+    trainable: bool = True
+
+    def make(self, dtype: torch.dtype, device) -> nn.Parameter:
+        t = torch.empty(self.shape, dtype=dtype, device=device)
+        if callable(self.init):
+            self.init(t)
+        elif self.init == "zeros":
+            t.zero_()
+        elif self.init == "ones":
+            t.fill_(1.0)
+        elif self.init == "kaiming":
+            # match nn.Linear default: kaiming_uniform_(a=sqrt(5))
+            nn.init.kaiming_uniform_(t, a=5 ** 0.5) if t.ndim >= 2 else t.normal_(0, 0.02)
+        else:
+            raise ValueError(f"unknown init: {self.init}")
+        return nn.Parameter(t, requires_grad=self.trainable)
+
+
+class Variant(Protocol):
+    name: str
+
+    @staticmethod
+    def param_specs(d_in: int, d_out: int, cfg: LoraLiteConfig) -> dict[str, ParamSpec]: ...
+
+    @staticmethod
+    def init(layer: nn.Linear, cfg: LoraLiteConfig) -> None: ...
+
+    @staticmethod
+    def forward(layer: nn.Linear, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """Return the layer's NEW output (not just delta).
+        Additive variants: `return y + delta`.
+        Replacing variants: ignore `y`, return new value."""
+        ...
+
+
+REGISTRY: dict[str, type] = {}
+
+
+def register(cls):
+    if not getattr(cls, "name", None):
+        raise ValueError(f"variant {cls} missing .name")
+    REGISTRY[cls.name] = cls
+    return cls

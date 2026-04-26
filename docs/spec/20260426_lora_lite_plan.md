@@ -1,0 +1,144 @@
+# lora-lite plan and status
+
+## Goal
+
+Build a small, hackable LoRA-family adapter library for research experiments.
+
+The core bet is that adapter variants should own the relationship between `(x, layer.weight, layer.lora_*)` and the layer output, while the library only handles targeting, parameter attachment, hooks, and save/load.
+
+## Non-goals
+
+- No PEFT compatibility layer.
+- No module replacement.
+- No merge/unmerge.
+- No multiple named adapters per layer.
+- No backward compatibility promises.
+- No silent fallbacks.
+
+## Design constraints
+
+- Adapter params are attached directly to target layers as `lora_*` parameters.
+- Save/load uses normal `state_dict()` keys, filtered by `"lora_"`.
+- Forward hooks return the layer's new output, not just a delta.
+- Targeting is structural: modules with `in_features`, `out_features`, and `weight` are linear-like.
+- LoRA/DeLoRA support bnb-style 4/8-bit forward paths because the quantized base layer computes `y`; the hook only adds adapter math.
+- PiSSA is fp-only in v1 because it mutates `layer.weight` into `W_res`.
+- Data-calibrated variants use `group_init(model, targets, cfg, calibration_data)`; dataloaders stay out of `cfg` so checkpoints are serializable.
+
+## Implemented v0.0.1
+
+| Area | Status | Evidence |
+|---|---:|---|
+| `LoraLiteConfig` | done | `src/lora_lite/config.py` |
+| Variant registry + `ParamSpec` | done | `src/lora_lite/variant.py` |
+| Structural target discovery | done | `src/lora_lite/target.py` |
+| `attach` / `detach` / `save` / `load` | done | `src/lora_lite/adapter.py` |
+| LoRA | done | `src/lora_lite/variants/lora.py` |
+| PiSSA | done, fp-only | `src/lora_lite/variants/pissa.py` |
+| DeLoRA | done | `src/lora_lite/variants/delora.py` |
+| Smoke tests | done | `tests/smoke.py` |
+| bnb minimal forward smoke | done | `Linear8bitLt` and `Linear4bit` pass on CUDA |
+
+## Current smoke evidence
+
+Last verified log: `/home/wassname/.cache/agent-tmp/lora_lite_smoke_after_review.log`
+
+| Check | Result |
+|---|---|
+| LoRA identity | `0.000e+00` |
+| LoRA loss drop | `6.1%` |
+| PiSSA identity | `1.550e-06` |
+| PiSSA loss drop | `11.5%` |
+| DeLoRA identity | `0.000e+00` |
+| DeLoRA loss drop | `93.4%` |
+| fake non-`nn.Linear` target | attaches, identity `0.000e+00`, grad nonzero |
+| bnb `Linear8bitLt` | identity `0.000e+00`, grad nonzero |
+| bnb `Linear4bit` | identity `0.000e+00`, grad nonzero |
+
+## Review history
+
+A cold subagent review first returned `PASS_WITH_BLOCKERS`:
+
+1. bnb modules were not targeted.
+2. Hook cast `y` to `cfg.dtype`, which could round base outputs.
+3. PiSSA overclaimed bnb support.
+4. `load()` did not fail on missing adapter keys.
+5. Data-calibrated init needed model-level access.
+
+Fixes applied:
+
+1. Structural `is_linear_like()` target predicate.
+2. Hook only casts `x`, keeps `y` in base output dtype.
+3. PiSSA fail-fast rejects non-plain `nn.Linear`.
+4. `load()` fails on missing or unexpected `lora_` keys.
+5. `attach(..., calibration_data=None)` plus optional `group_init(model, targets, cfg, calibration_data)`.
+
+Second cold review verdict: `PASS` for the minimal 4bit-enabled scope.
+
+## TODO / status
+
+### Next implementation goals
+
+- [ ] Add DoRA.
+  - Verify: fp32/bf16 identity at init, finite gradients, and smoke loss drop.
+  - Caveat: bnb DoRA needs explicit weight dequantization for norm computation or should be fp-only at first.
+
+- [ ] Add VeRA.
+  - Verify: shared buffers are allocated once, target slices match shape, identity or near-identity at init.
+
+- [ ] Add SSVD or AntiPaSTO-style SVD variant.
+  - Verify: reconstruction or intended rotation invariant at init.
+
+- [ ] Add real activation-calibrated toy variant using `group_init`.
+  - Verify: `calibration_data` is consumed during `attach`, hooks are removed, checkpoint is serializable, and `load()` does not require calibration data.
+
+- [ ] Add load path that can skip calibration init for future `group_init` variants.
+  - Current caveat: `load()` calls `attach(model, cfg)` with `calibration_data=None`; fine for current variants, but future calibrated variants should separate param creation from calibration.
+
+- [ ] Add a tiny HF-model smoke when convenient.
+  - Verify: target names look like real transformer modules and state dict keys match full paths.
+
+### Design TODOs
+
+- [ ] Decide whether `group_init` should run before or after forward hooks are registered.
+  - Current choice: after params are attached, before adapter forward hooks are registered.
+
+- [ ] Decide whether replacing variants need `runs_base_layer=False` or can always transform `y`.
+  - OFT-like variants can rotate `y`; variants that truly avoid base forward need module replacement or pre-hook rewriting, likely out of v1.
+
+- [ ] Add `weight_mode` for BitFit/SHiRA if those variants become in-scope.
+  - Minimal surface: `weight_mode in {"frozen", "bias_only", "sparse_grad"}`.
+
+## Variant contract
+
+```python
+class Variant:
+    name: str
+
+    @staticmethod
+    def param_specs(d_in, d_out, cfg) -> dict[str, ParamSpec]: ...
+
+    @staticmethod
+    def init(layer, cfg) -> None:
+        # weight-only init; may mutate plain fp weights
+        ...
+
+    @staticmethod
+    def group_init(model, targets, cfg, calibration_data) -> None:
+        # optional model-level init for data-calibrated or cross-layer variants
+        ...
+
+    @staticmethod
+    def forward(layer, x, y) -> Tensor:
+        # return NEW output; additive variants return y + delta
+        ...
+```
+
+## Done means
+
+This repo is good enough for a first real experiment when:
+
+1. A Qwen/Llama model can attach LoRA adapters to intended target layers.
+2. A 4bit or 8bit loaded model can train LoRA/DeLoRA params with nonzero gradients.
+3. Saved adapter tensors use full-path keys and reload without calibration data.
+4. Smoke tests distinguish target-skipping, hook identity drift, and missing-key load failure.
