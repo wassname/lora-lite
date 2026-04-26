@@ -2,6 +2,21 @@
 
 Meng et al. 2024  https://arxiv.org/abs/2404.02948
 W_eff(t=0) = W_res + B@A = W (numerically; bf16 round-trip not bit-exact).
+
+DEVIATION FROM PAPER (documented):
+  - Paper sets adapter scale = 1 (no alpha/r factor); we keep LoRA's alpha/r
+    pipeline so callers must pass alpha=r to get paper-faithful identity.
+  - Saved adapter does NOT include W_res; load() recomputes PiSSA init on the
+    *same-seed base* before overwriting A/B. Reload is exact only on identical
+    base weights.
+
+Reference implementations (for review/cross-check):
+  - PiSSA original (NeurIPS'24 spotlight) init script (SVD on dequant W):
+    https://github.com/MuLabPKU/PiSSA/blob/main/utils/init_pissa.py
+    (offline: docs/refs/orig_pissa_init.py)
+  - peft PiSSA flavor (init_lora_weights='pissa') in:
+    https://github.com/huggingface/peft/blob/main/src/peft/tuners/lora/layer.py
+    (offline: docs/refs/peft_lora_layer.py, see pissa_init / loftq_init paths)
 """
 import torch
 from einops import einsum

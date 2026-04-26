@@ -1,6 +1,6 @@
 """DeLoRA: column-normalised A, B, scaled by lambda * ||W||_F / r.
 
-Bini et al. 2025  https://arxiv.org/abs/2503.18225
+Bini et al. 2025 (ICLR'25)  https://arxiv.org/abs/2503.18225
 
 Paper Eq. 8:    W' = W + (lambda * ||W||_F / r) B Xi A
 where Xi_{i,i} = 1 / (||b_i|| ||a_i||) makes each rank-1 component unit-norm.
@@ -12,7 +12,22 @@ Identity at t=0: paper uses kaiming init for both A and B with `lambda` initiali
 to 0 (or small) so the effective delta starts near zero. We honour that:
 default lambda0 == 0 gives bit-identity; user can override via variant_kwargs.
 
+KNOWN GRADIENT ISSUE (flagged by external review 2026-04-26):
+  With lambda0=0 the *forward* is identity but `A,B` get zero gradient on step 0
+  (delta = lambda * ... -> d_output/d_A is proportional to lambda). Only
+  `lora_lambda` moves first step. With lambda0>0, A,B train but identity is broken.
+  Paper's true initialization (frozen-copy trick, see Eq. 9) achieves both;
+  we do NOT implement that here.
+
 The frozen ||W||_F factor is captured once at init() into a buffer `lora_wnorm`.
+
+Reference implementations (for review/cross-check):
+  - DeLoRA paper authors (ExplainableML/DeLoRA) -- their fork of peft:
+    https://github.com/ExplainableML/DeLoRA/blob/main/peft/src/peft/tuners/delora.py
+    (offline: docs/refs/orig_delora.py)
+  - peft DeLoRA (upstreamed):
+    https://github.com/huggingface/peft/blob/main/src/peft/tuners/delora/layer.py
+    (offline: docs/refs/peft_delora_layer.py)
 """
 import torch
 import torch.nn.functional as F

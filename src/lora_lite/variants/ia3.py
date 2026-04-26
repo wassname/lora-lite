@@ -16,6 +16,11 @@ DEVIATION FROM PAPER:
 
     `up_proj` is the closest stand-in for "FFN intermediate" in gated-MLP blocks
     (Llama uses gate * up; gating the up branch is the IA3-spirit choice).
+
+Reference implementations (for review/cross-check):
+  - peft IA3 layer (uses ia3_l elementwise scaling, fan_in_fan_out aware):
+    https://github.com/huggingface/peft/blob/main/src/peft/tuners/ia3/layer.py
+    (offline: docs/refs/peft_ia3_layer.py)
 """
 import torch
 from torch import nn

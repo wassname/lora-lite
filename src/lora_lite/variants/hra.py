@@ -13,10 +13,25 @@ Identity at t=0: `lora_gate` is initialized to 0 and gates each Householder
 vector, so the effective u_i starts at 0 -> H_i = I -> R = I -> y' = y.
 At training time the gate scales the active reflection direction.
 
+KNOWN GRADIENT ISSUE (flagged by external review 2026-04-26):
+  Forward is `x + gate * (Rx - x)`. With gate=0 at init, d_output/d_U is
+  proportional to gate, so on step 0 ONLY `lora_gate` receives gradient;
+  `lora_U` is dead. Once gate moves off zero, U starts learning. This deviates
+  from the paper, which has no such gate -- paper uses orthogonal init of U so
+  R != I from step 0. We trade paper-faithful init for identity-at-init.
+
 OMITTED: paper also adds an orthogonality regularizer
     lambda * sum_i (u_i^T u_j)^2          (Eq. 6 / Sec. 3.3)
 which is a loss term, not a forward-pass change. Add it in your training loop if
 you want the regularized HRA variant.
+
+Reference implementations (for review/cross-check):
+  - HRA paper authors (DaShenZi721/HRA), llama variant of OFT layer with HRA:
+    https://github.com/DaShenZi721/HRA/blob/master/llama/peft/oft/layer_GS_HRA.py
+    (offline: docs/refs/orig_hra_layer.py)
+  - peft HRA layer (cleaner, includes apply_GS toggle for orthogonalization):
+    https://github.com/huggingface/peft/blob/main/src/peft/tuners/hra/layer.py
+    (offline: docs/refs/peft_hra_layer.py)
 """
 import torch
 from einops import einsum

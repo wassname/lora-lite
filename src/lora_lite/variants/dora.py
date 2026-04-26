@@ -6,6 +6,17 @@ At t=0:  B=0 -> V=W -> y_new = (m_init / ||W||_c) (Wx + 0) = Wx   when m_init = 
 
 Limitation: requires materializing the dense weight to compute ||V||_c. v1 supports
 plain nn.Linear only; bnb 4/8-bit layers raise loudly.
+
+DEVIATION (numerical):
+  - We differentiate through ||V||_c every forward. The paper's sec. 4.3 suggests
+    a 'cost-saving' variant that detaches ||V|| in backward (gradient only flows
+    through V); we do NOT do that. Real impact: slower step, slightly different
+    gradient direction. Faithful to the eq.5 forward, not the optimized one.
+
+Reference implementations (for review/cross-check):
+  - peft DoRA (separate file under lora/):
+    https://github.com/huggingface/peft/blob/main/src/peft/tuners/lora/dora.py
+    (offline: docs/refs/peft_lora_dora.py)
 """
 import torch
 import torch.nn.functional as F
