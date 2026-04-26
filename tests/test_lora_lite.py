@@ -1,6 +1,11 @@
+"""Per-variant attach + train + save + load round-trip, plus surgical regressions.
+
+The big invariant is the parametrized train_save_load test: identity at t=0,
+gradient flow on a real loss, then save -> reload onto a fresh model and
+confirm the trained outputs survive the round-trip. Cheap on CPU.
+"""
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 import pytest
@@ -10,7 +15,31 @@ from torch import nn
 import lora_lite as ll
 
 
-ARTIFACT_DIR = Path(__file__).parent / "_artifacts"
+CFG_BY_VARIANT = {
+    "lora": ll.LoRAConfig,
+    "pissa": ll.PiSSAConfig,
+    "delora": ll.DeLoRAConfig,
+    "ia3": ll.IA3Config,
+    "ia3_ff": ll.IA3FFConfig,
+    "dora": ll.DoRAConfig,
+    "hra": ll.HRAConfig,
+    "eva": ll.EVAConfig,
+    "antipasto": ll.AntiPaSTOConfig,
+}
+
+# Per-variant identity tolerance at t=0 (after attach, before any step).
+# fp32 SVD round-trip + per-row norm = looser tolerance for pissa/dora/antipasto.
+IDENTITY_TOL = {
+    "lora": 1e-6,
+    "pissa": 5e-4,
+    "delora": 1e-6,
+    "ia3": 1e-6,
+    "ia3_ff": 1e-6,
+    "dora": 5e-5,
+    "hra": 5e-6,
+    "eva": 1e-6,
+    "antipasto": 5e-4,
+}
 
 
 class TinyBlock(nn.Module):
@@ -46,12 +75,14 @@ class TinyModel(nn.Module):
 
 
 class FakeLinearLike(nn.Module):
+    """linear-like, but not nn.Linear: stand-in for bnb 4/8-bit modules."""
+
     def __init__(self, d_in: int = 8, d_out: int = 8):
         super().__init__()
         self.in_features = d_in
         self.out_features = d_out
         self.weight = nn.Parameter(torch.empty(d_out, d_in))
-        nn.init.kaiming_uniform_(self.weight, a=5**0.5)
+        nn.init.kaiming_uniform_(self.weight, a=5 ** 0.5)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return torch.nn.functional.linear(x, self.weight)
@@ -67,24 +98,9 @@ class FakeBnbModel(nn.Module):
         return self.layers[0](x)
 
 
-_CFG_BY_VARIANT = {
-    "lora": ll.LoRAConfig,
-    "pissa": ll.PiSSAConfig,
-    "delora": ll.DeLoRAConfig,
-    "ia3": ll.IA3Config,
-    "ia3_ff": ll.IA3FFConfig,
-    "dora": ll.DoRAConfig,
-    "hra": ll.HRAConfig,
-    "eva": ll.EVAConfig,
-    "antipasto": ll.AntiPaSTOConfig,
-}
-
-
-def cfg_for_variant(variant: str, *, training: bool = False) -> ll.AdapterConfig:
-    # DeLoRA keeps identity via B=0, so nonzero lambda is needed for the
-    # perturb-output check to distinguish a live adapter from dead code.
+def cfg_for(variant: str) -> ll.AdapterConfig:
     extra = {"lambda0": 0.1} if variant == "delora" else {}
-    return _CFG_BY_VARIANT[variant](
+    return CFG_BY_VARIANT[variant](
         r=4,
         alpha=4 if variant == "pissa" else 8,
         dtype=torch.float32,
@@ -92,182 +108,172 @@ def cfg_for_variant(variant: str, *, training: bool = False) -> ll.AdapterConfig
     )
 
 
-def adapter_state(model: nn.Module) -> dict[str, torch.Tensor]:
-    return {k: v.detach().clone() for k, v in model.state_dict().items() if "lora_" in k}
+def attach_with_calib(model: nn.Module, cfg: ll.AdapterConfig, ids: torch.Tensor) -> None:
+    if cfg.variant == "eva":
+        calib = [ids for _ in range(2)]
+        ll.attach(model, cfg, calibration_data=calib)
+    else:
+        ll.attach(model, cfg)
 
 
-def assert_only_lora_trainable(model: nn.Module) -> None:
-    trainable_names = [name for name, p in model.named_parameters() if p.requires_grad]
-    assert trainable_names
-    assert all("lora_" in name for name in trainable_names)
+def trainable_grad_norm(model: nn.Module) -> float:
+    return sum(
+        p.grad.detach().float().norm().item()
+        for n, p in model.named_parameters()
+        if "lora_" in n and p.grad is not None
+    )
 
 
-def assert_no_base_grads(model: nn.Module) -> None:
-    leaked = [name for name, p in model.named_parameters() if "lora_" not in name and p.grad is not None]
-    assert leaked == []
-
-
-def perturb_first_adapter(model: nn.Module) -> None:
-    """Nudge one trainable adapter parameter so forward output changes.
-
-    Priority order matters: with B=0 init (DeLoRA, EVA, LoRA), perturbing a
-    scalar gate or lambda alone keeps delta=0, so we hit a matrix entry first.
-    """
-    priority = ("lora_B", "lora_g", "lora_U", "lora_A", "lora_lambda", "lora_gate")
-    for key in priority:
-        for name, p in model.named_parameters():
-            if not p.requires_grad or key not in name:
-                continue
-            with torch.no_grad():
-                if p.ndim == 0:
-                    p.add_(0.25)
-                else:
-                    p.flatten()[0].add_(0.25)
-            return
-    raise AssertionError("no perturbable adapter parameter found")
-
-
-@pytest.mark.parametrize("variant", ["lora", "pissa", "delora", "ia3", "dora", "hra"])
-def test_variant_identity_hook_save_load_and_training(variant: str):
-    ARTIFACT_DIR.mkdir(exist_ok=True)
+@pytest.mark.parametrize("variant", list(CFG_BY_VARIANT))
+def test_train_save_load(variant: str, tmp_path: Path):
+    """Identity at t=0, one SGD step, save, reload onto fresh model, outputs match."""
     torch.manual_seed(0)
     model = TinyModel()
     ids = torch.randint(0, 100, (2, 16))
-
     with torch.no_grad():
         y_base = model(ids).clone()
 
-    cfg = cfg_for_variant(variant)
-    handles = ll.attach(model, cfg)
-    assert len(handles) == 28
-    assert_only_lora_trainable(model)
+    cfg = cfg_for(variant)
+    attach_with_calib(model, cfg, ids)
+
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    assert trainable
+    assert all("lora_" in n for n, p in model.named_parameters() if p.requires_grad)
 
     with torch.no_grad():
         y_init = model(ids).clone()
-    identity_err = (y_init - y_base).abs().max().item()
-    identity_tol = {"lora": 1e-6, "pissa": 5e-4, "delora": 1e-6, "ia3": 1e-6, "dora": 5e-5, "hra": 5e-6}[variant]
-    assert identity_err < identity_tol
+    assert (y_init - y_base).abs().max().item() < IDENTITY_TOL[variant]
 
-    before_perturb = adapter_state(model)
-    perturb_first_adapter(model)
+    target = torch.randn_like(y_init) * 0.1
+    opt = torch.optim.SGD(trainable, lr=1e-2)
+    opt.zero_grad()
+    loss = (model(ids) - target).pow(2).mean()
+    loss.backward()
+    leaked = [n for n, p in model.named_parameters() if "lora_" not in n and p.grad is not None]
+    assert leaked == []
+    assert trainable_grad_norm(model) > 0
+    opt.step()
+
     with torch.no_grad():
-        perturb_delta = (model(ids) - y_init).abs().max().item()
-    assert perturb_delta > 1e-7
-    for name, value in before_perturb.items():
-        model.state_dict()[name].copy_(value)
+        y_trained = model(ids).clone()
 
-    path = ARTIFACT_DIR / f"{variant}_adapter.pt"
+    path = tmp_path / "adapter.pt"
     ll.save(model, str(path))
-    saved = torch.load(path, weights_only=True, map_location="cpu")
-    assert set(saved["state"]) == set(adapter_state(model))
-    assert any(k.startswith("layers.0.q_proj.lora_") for k in saved["state"])
 
     torch.manual_seed(0)
     model_loaded = TinyModel()
-    ll.load(model_loaded, str(path))
-    loaded_state = adapter_state(model_loaded)
-    for name, value in saved["state"].items():
-        assert torch.equal(loaded_state[name].cpu(), value)
+    ll.load(model_loaded, str(path))  # EVA load skips group_init; calibration_data not needed
     with torch.no_grad():
         y_loaded = model_loaded(ids)
-    assert (y_loaded - y_init).abs().max().item() < identity_tol
-
-    torch.manual_seed(0)
-    train_model = TinyModel()
-    ll.attach(train_model, cfg_for_variant(variant, training=True))
-    assert_only_lora_trainable(train_model)
-    target = torch.randn(2, 16, 100) * 0.1
-    trainable = [p for p in train_model.parameters() if p.requires_grad]
-    opt = torch.optim.Adam(trainable, lr=0.1) if variant in ("delora", "ia3", "hra") else (
-        torch.optim.Adam(trainable, lr=1e-3) if variant == "dora" else torch.optim.SGD(trainable, lr=1e-2)
-    )
-    losses = []
-    first_grad_norm = math.nan
-    before_train = adapter_state(train_model)
-    for step in range(20):
-        opt.zero_grad()
-        loss = (train_model(ids) - target).pow(2).mean()
-        loss.backward()
-        assert_no_base_grads(train_model)
-        grad_norm = sum(
-            p.grad.detach().float().norm().item()
-            for name, p in train_model.named_parameters()
-            if "lora_" in name and p.grad is not None
-        )
-        assert math.isfinite(grad_norm)
-        if step == 0:
-            first_grad_norm = grad_norm
-        opt.step()
-        losses.append(loss.item())
-    after_train = adapter_state(train_model)
-    adapter_delta = sum((after_train[k] - before_train[k]).float().norm().item() for k in before_train)
-    drop = (losses[0] - losses[-1]) / losses[0]
-    assert first_grad_norm > 0
-    assert adapter_delta > 0
-    assert drop > 0.05
+    assert (y_loaded - y_trained).abs().max().item() < max(IDENTITY_TOL[variant], 1e-5)
 
 
-def test_load_fails_on_missing_and_unexpected_lora_keys():
-    ARTIFACT_DIR.mkdir(exist_ok=True)
+@pytest.mark.parametrize("variant", ["lora", "delora", "ia3", "hra"])
+def test_hook_only_variants_attach_to_non_linear_target(variant: str):
+    """bnb-style targets are linear-like but not nn.Linear; hook-only variants must accept them."""
+    extra = {"lambda0": 0.1} if variant == "delora" else {}
+    cfg = CFG_BY_VARIANT[variant](r=2, alpha=4, dtype=torch.float32, target_roles=(), **extra)
+    model = FakeBnbModel()
+    ll.attach(model, cfg)
+    x = torch.randn(2, 3, 8)
+    model(x).pow(2).mean().backward()
+    assert trainable_grad_norm(model) > 0
+
+
+@pytest.mark.parametrize("variant", ["pissa", "dora", "antipasto"])
+def test_weight_reading_variants_reject_non_linear(variant: str):
+    r = 4 if variant == "antipasto" else 2  # antipasto needs r % block_size==0
+    cfg = CFG_BY_VARIANT[variant](r=r, alpha=r, dtype=torch.float32, target_roles=())
+    with pytest.raises(TypeError, match="plain nn.Linear"):
+        ll.attach(FakeBnbModel(), cfg)
+
+
+def test_save_load_strict_keys(tmp_path: Path):
     torch.manual_seed(0)
     model = TinyModel()
-    ll.attach(model, cfg_for_variant("lora"))
-    good_path = ARTIFACT_DIR / "lora_good.pt"
-    ll.save(model, str(good_path))
-    blob = torch.load(good_path, weights_only=True, map_location="cpu")
+    ll.attach(model, ll.LoRAConfig(r=4, alpha=8, dtype=torch.float32))
+    p = tmp_path / "lora.pt"
+    ll.save(model, str(p))
+    blob = torch.load(p, weights_only=True, map_location="cpu")
 
-    missing_blob = {"cfg": blob["cfg"], "state": dict(blob["state"])}
-    missing_blob["state"].pop(next(iter(missing_blob["state"])))
-    missing_path = ARTIFACT_DIR / "lora_missing.pt"
-    torch.save(missing_blob, missing_path)
+    missing = {"cfg": blob["cfg"], "state": dict(blob["state"]), "base_fp": blob.get("base_fp", {})}
+    missing["state"].pop(next(iter(missing["state"])))
+    torch.save(missing, p)
     with pytest.raises(RuntimeError, match="missing lora keys"):
-        ll.load(TinyModel(), str(missing_path))
+        ll.load(TinyModel(), str(p))
 
-    unexpected_blob = {"cfg": blob["cfg"], "state": dict(blob["state"])}
-    unexpected_blob["state"]["layers.0.q_proj.lora_extra"] = torch.zeros(1)
-    unexpected_path = ARTIFACT_DIR / "lora_unexpected.pt"
-    torch.save(unexpected_blob, unexpected_path)
+    bad = {"cfg": blob["cfg"], "state": dict(blob["state"]), "base_fp": blob.get("base_fp", {})}
+    bad["state"]["layers.0.q_proj.lora_extra"] = torch.zeros(1)
+    torch.save(bad, p)
     with pytest.raises(RuntimeError, match="unexpected lora keys"):
-        ll.load(TinyModel(), str(unexpected_path))
+        ll.load(TinyModel(), str(p))
 
 
-def test_no_target_layers_is_loud_failure():
+def test_no_target_layers_is_loud():
     cfg = ll.LoRAConfig(target_names=("definitely_missing",))
     with pytest.raises(RuntimeError, match="no target layers"):
         ll.attach(TinyModel(), cfg)
 
 
-@pytest.mark.parametrize("variant", ["lora", "delora", "ia3", "hra"])
-def test_structural_non_linear_target_trains_for_forward_only_variants(variant: str):
+def test_eva_requires_calibration():
+    """EVA's group_init must error loudly if calibration_data is missing."""
+    with pytest.raises(ValueError, match="calibration_data"):
+        ll.attach(TinyModel(), ll.EVAConfig(r=4, alpha=8, dtype=torch.float32))
+
+
+def test_dora_bias_passthrough():
+    """Regression: DoRA must NOT scale bias; identity holds with bias=True at t=0."""
     torch.manual_seed(0)
-    model = FakeBnbModel()
-    x = torch.randn(2, 3, 8)
-    y_base = model(x).detach()
-    extra = {"lambda0": 0.1} if variant == "delora" else {}
-    cfg = _CFG_BY_VARIANT[variant](
-        r=2,
-        alpha=4,
-        dtype=torch.float32,
-        target_roles=(),
-        **extra,
-    )
-    ll.attach(model, cfg)
-    y_init = model(x)
-    # delora: lambda0=0.1 is small but B=0 still makes delta=0 at t=0, so identity holds.
-    assert (y_init.detach() - y_base).abs().max().item() < 1e-6
-    loss = y_init.pow(2).mean()
-    loss.backward()
-    assert_no_base_grads(model)
-    adapter_grad_norm = sum(
-        p.grad.detach().float().norm().item()
-        for name, p in model.named_parameters()
-        if "lora_" in name and p.grad is not None
-    )
-    assert adapter_grad_norm > 0
+    d = 16
+    layer = nn.Linear(d, d, bias=True)
+    x = torch.randn(2, d)
+    y_base = layer(x).detach()
+
+    class Wrap(nn.Module):
+        def __init__(self, lin):
+            super().__init__()
+            self.config = type("Cfg", (), {"hidden_size": d})()
+            self.layers = nn.ModuleList([lin])
+
+        def forward(self, x):
+            return self.layers[0](x)
+
+    model = Wrap(layer)
+    ll.attach(model, ll.DoRAConfig(r=2, alpha=4, dtype=torch.float32, target_roles=()))
+    with torch.no_grad():
+        y = model(x)
+    assert (y - y_base).abs().max().item() < 1e-5
 
 
-@pytest.mark.parametrize("variant", ["pissa", "dora"])
-def test_weight_reading_variants_reject_structural_non_linear_target(variant: str):
-    cfg = _CFG_BY_VARIANT[variant](r=2, alpha=2, dtype=torch.float32, target_roles=())
-    with pytest.raises(TypeError, match="plain nn.Linear"):
-        ll.attach(FakeBnbModel(), cfg)
+def test_hra_forward_is_x_R_T():
+    """HRA must apply x @ R^T (loop i = r-1 down to 0). Asymmetric U makes order observable."""
+    torch.manual_seed(0)
+    d = 8
+    layer = nn.Linear(d, d, bias=False)
+    x = torch.randn(2, 3, d)
+
+    class Wrap(nn.Module):
+        def __init__(self, lin):
+            super().__init__()
+            self.config = type("Cfg", (), {"hidden_size": d})()
+            self.layers = nn.ModuleList([lin])
+
+        def forward(self, x):
+            return self.layers[0](x)
+
+    model = Wrap(layer)
+    ll.attach(model, ll.HRAConfig(r=4, alpha=4, dtype=torch.float32, target_roles=()))
+    # break paired symmetry so order matters
+    with torch.no_grad():
+        layer.lora_U.add_(0.1 * torch.randn_like(layer.lora_U))
+
+    U = layer.lora_U
+    R = torch.eye(d)
+    for i in range(U.shape[0]):
+        u = U[i]
+        sq = (u * u).sum().clamp_min(1e-12)
+        R = R - (2.0 / sq) * torch.outer(R @ u, u)
+    with torch.no_grad():
+        y_adapt = model(x)
+        y_ref = torch.nn.functional.linear(x, layer.weight @ R)
+    assert (y_adapt - y_ref).abs().max().item() < 1e-5

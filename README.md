@@ -44,11 +44,12 @@ See [docs/spec/20260426_lora_lite_plan.md](docs/spec/20260426_lora_lite_plan.md)
 | LoRA | yes | additive low-rank adapter |
 | PiSSA | yes, fp only | mutates `weight` into `W_res`; quantized PiSSA intentionally fails |
 | DeLoRA | yes | normalized additive adapter with learned scalar |
-| IA3 | yes | output gate initialized to ones |
+| IA3 | yes | output gate (`ia3`) or input gate (`ia3_ff`); init to ones |
 | DoRA | yes, fp only | reads dense `weight` for column-norm; quantized DoRA fails loudly |
-| HRA | yes | output-side Householder reflection with identity gate; works on bnb |
+| HRA | yes | input-side Householder product via pre-hook; works on bnb |
+| EVA | yes, fp only | LoRA forward; `lora_A` init from PCA on calibration activations |
+| AntiPaSTO | yes, fp only | top-r weight SVD with learnable singular-value deltas + Cayley rotation |
 | SSVD / OFT / ROAD | no | planned |
-| S-steer / AntiPaSTO | no | should use data-calibrated `group_init`, not plain LoRA tests |
 
 ## Targeting
 

@@ -492,7 +492,14 @@ def run(args: BenchmarkConfig) -> dict[str, Any]:
     model, tokenizer = load_model_and_tokenizer(args.model, dtype, args.device)
     batches, skipped_train_prompt_too_long = make_train_batches(datasets["train"], tokenizer, args)
     cfg = cfg_for_variant(args, dtype)
-    ll.attach(model, cfg)
+    if args.variant == "eva":
+        calib = [
+            {"input_ids": b["input_ids"], "attention_mask": b["attention_mask"]}
+            for b in batches[: min(4, len(batches))]
+        ]
+        ll.attach(model, cfg, calibration_data=calib)
+    else:
+        ll.attach(model, cfg)
     attached = getattr(model, "_lora_lite_attached")
     trainable_names = assert_only_lora_trainable(model)
     probe_metrics = None

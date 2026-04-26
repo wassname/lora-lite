@@ -72,11 +72,15 @@ Activation-aware variants implement `group_init(model, targets, cfg, calibration
 
 ## Adapter roadmap
 
-| Variant | Fit to current runtime | Next invariant |
+| Variant | Fit to current runtime | Status |
 |---|---|---|
-| IA3 | Done. Output gate `y * g`, identity at `g=1`. | Qwen proof in latest probe. |
-| DoRA | Done for fp layers. Reads dense `weight` to compute `||V||_c`; quantized layers fail fast. | Qwen proof in latest probe. |
-| HRA | Done. Output-side Householder with identity gate; hook-only -> works on bnb. | Qwen proof in latest probe. |
-| SSVD / PiSSA-family | Fits weight-SVD init path. | reconstruction/identity invariant plus train proof. |
-| OFT / ROAD | Block-diagonal rotations; weight-transform semantics need clearer hook-only formulation. | pseudocode first, then rotation/non-dead-code invariant. |
-| S-steer / AntiPaSTO | Should use `group_init` and activation evidence. | calibration consumed, hooks removed, load works without calibration. |
+| LoRA | Hook-only additive low-rank. | Done. Tested. |
+| PiSSA | Mutates `layer.weight` into `W_res`; identity via SVD round-trip. | Done. fp-only. Tested. |
+| DeLoRA | Per-input-channel weight-norm scale, per-rank A/B normalization, learned `lambda`. | Done. Tested. |
+| IA3 / IA3_FF | Output gate (k/v) and input gate (down_proj) variants, init to ones. | Done. Tested. |
+| DoRA | Reads dense `weight` for `||V||_c`; bias passes through unscaled. | Done. fp-only. Tested. |
+| HRA | Householder product applied via `forward_input` pre-hook; bnb-friendly. | Done. Tested. |
+| EVA | LoRA forward; `lora_A` init from PCA on calibration activations via `group_init`. | Done. fp-only. Tested. |
+| AntiPaSTO | Top-r weight SVD, learnable singular-value deltas + block-diagonal Cayley rotation. | Done. fp-only. Tested. |
+| SSVD | Could fit the weight-SVD init path. | Planned. |
+| OFT / ROAD | Block-diagonal rotations; needs clearer hook-only formulation. | Planned. |
