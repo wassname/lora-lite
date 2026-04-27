@@ -428,7 +428,7 @@ def check_probe_reload(
     del loaded_model
     gc.collect()
     torch.cuda.empty_cache()
-    return {"reload_err": reload_err, "saved_tensors": len(saved["state"])}
+    return {"reload_err": reload_err, "saved_tensors": len(saved_sd)}
 
 
 def print_final_report(row: dict[str, Any], result_path: Path, mode: str) -> None:

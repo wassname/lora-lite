@@ -12,7 +12,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-04-22T01:31:09.47902161Z"
+exclude-newer = "2026-04-22T02:16:12.377169857Z"
 exclude-newer-span = "P5D"
 
 [[package]]
@@ -1012,6 +1012,8 @@ dependencies = [
     { name = "einops" },
     { name = "jaxtyping", version = "0.3.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "jaxtyping", version = "0.3.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "safetensors" },
     { name = "torch" },
 ]
@@ -1051,6 +1053,7 @@ requires-dist = [
     { name = "datasets", marker = "extra == 'benchmark'", specifier = ">=3.6" },
     { name = "einops", specifier = ">=0.7" },
     { name = "jaxtyping", specifier = ">=0.2.34" },
+    { name = "numpy", specifier = ">=1.26" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "safetensors", specifier = ">=0.5" },
     { name = "safetensors", marker = "extra == 'benchmark'", specifier = ">=0.5" },

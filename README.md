@@ -47,16 +47,16 @@ just qwen-probe  # Qwen/Qwen3-0.6B train/save-load probe
 
 ## Variants
 
-| Variant | 4bit/8bit | MetaMath acc (GSM8K %) | Notes |
-|---|---|---|---|
-| [LoRA](https://arxiv.org/abs/2106.09685) | yes | 63.2% | |
-| [PiSSA](https://arxiv.org/abs/2404.02948) | no (edits weight) | — | |
-| [DeLoRA](https://arxiv.org/abs/2503.18225) | yes | — | |
-| [IA3](https://arxiv.org/pdf/2205.05638) | yes | — | output gate (ia3) or input gate (ia3_ff) |
-| [DoRA](https://arxiv.org/abs/2402.09353) | no (reads weight) | — | |
-| [HRA](https://arxiv.org/abs/2409.01434) | yes | — | input-side Householder; works on bnb |
-| [EVA](https://arxiv.org/abs/2409.07871) | no (calibration SVD) | — | |
-| [AntiPaSTO](https://arxiv.org/abs/2503.08696) | no (reads weight SVD) | — | |
+| Variant                                       | 4bit/8bit | GSM8K % |
+| --------------------------------------------- | --------- | ------- |
+| [LoRA](https://arxiv.org/abs/2106.09685)      | yes       | 63.2%   |
+| [PiSSA](https://arxiv.org/abs/2404.02948)     | no        | —       |
+| [DeLoRA](https://arxiv.org/abs/2503.18225)    | yes       | —       |
+| [IA3](https://arxiv.org/pdf/2205.05638)       | yes       | —       |
+| [DoRA](https://arxiv.org/abs/2402.09353)      | no        | —       |
+| [HRA](https://arxiv.org/abs/2409.01434)       | yes       | —       |
+| [EVA](https://arxiv.org/abs/2409.07871)       | no        | —       |
+| [AntiPaSTO](https://arxiv.org/abs/2503.08696) | no        | —       |
 
 Our test setup: We take Qwen3-0.6B-Base and train one MetaMathQA for 5000 steps. We use a rank of 32, and itnervene on all linear layer then test on GSM8K.
 
