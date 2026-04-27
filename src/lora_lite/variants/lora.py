@@ -37,7 +37,6 @@ class LoRA:
 
     @staticmethod
     def init(layer: nn.Module, cfg) -> None:
-        # B is zeros => delta=0 at t=0; identity invariant holds.
         return
 
     @staticmethod

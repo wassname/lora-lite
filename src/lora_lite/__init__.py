@@ -20,6 +20,7 @@ from .variants.dora import DoRAConfig
 from .variants.hra import HRAConfig
 from .variants.eva import EVAConfig
 from .variants.antipasto import AntiPaSTOConfig
+from .variants.road import RoadConfig
 
 __all__ = [
     "AdapterConfig",
@@ -32,6 +33,7 @@ __all__ = [
     "HRAConfig",
     "EVAConfig",
     "AntiPaSTOConfig",
+    "RoadConfig",
     "attach",
     "detach",
     "save",

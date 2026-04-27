@@ -31,7 +31,7 @@ sys.modules[SPEC.name] = benchmark
 SPEC.loader.exec_module(benchmark)
 
 
-VARIANTS = ["lora", "pissa", "delora", "ia3", "ia3_ff", "dora", "hra", "eva", "antipasto"]
+VARIANTS = ["lora", "pissa", "delora", "ia3", "ia3_ff", "dora", "hra", "eva", "antipasto", "road"]
 # Variants that fail loud when attached on a bnb-loaded base (read dense weight in init).
 # delora/eva also read weight but currently silently dequant -- they produce sane attach,
 # so we don't expect a raise from them in the attach-only smoke.
@@ -69,6 +69,7 @@ def quick_cfg(variant: str, tmp_path: Path, quantization: str = "none") -> "benc
         max_seq_length=128,
         max_new_tokens=8,
         lr=5e-3,
+        road_group_size=8,
         seed=0,
         log_examples=0,
         log_every=1000,

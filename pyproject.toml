@@ -8,6 +8,7 @@ dependencies = [
     "torch>=2.1",
     "einops>=0.7",
     "jaxtyping>=0.2.34",
+    "safetensors>=0.5",
 ]
 keywords = ["lora", "pytorch", "peft", "adapters", "llm"]
 classifiers = [

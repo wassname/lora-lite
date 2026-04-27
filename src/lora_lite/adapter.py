@@ -1,5 +1,6 @@
 """attach / detach / save / load. The whole runtime."""
 from __future__ import annotations
+import json
 import torch
 from torch import nn
 from torch.utils.hooks import RemovableHandle
@@ -121,19 +122,22 @@ def save(model: nn.Module, path: str) -> None:
     if state is None:
         raise RuntimeError("no adapter attached; call attach() first")
     sd = {k: v.detach().cpu() for k, v in model.state_dict().items() if "lora_" in k}
-    blob = {
-        "cfg": state["cfg"].to_dict(),
-        "state": sd,
-        "base_fp": _base_weight_fingerprint(model),
+    metadata = {
+        "cfg": json.dumps(state["cfg"].to_dict()),
+        "base_fp": json.dumps(_base_weight_fingerprint(model)),
     }
-    torch.save(blob, path)
+    from safetensors.torch import save_file
+    save_file(sd, path, metadata=metadata)
 
 
 def load(model: nn.Module, path: str) -> list[RemovableHandle]:
-    blob = torch.load(path, weights_only=True, map_location="cpu")
-    cfg = AdapterConfig.from_dict(blob["cfg"])
+    from safetensors.torch import load_file, safe_open
+    with safe_open(path, framework="pt", device="cpu") as f:
+        metadata = f.metadata()
+    sd = load_file(path, device="cpu")
+    cfg = AdapterConfig.from_dict(json.loads(metadata["cfg"]))
     handles = attach(model, cfg, _skip_group_init=True)  # creates empty params; data-driven inits restored from state_dict
-    missing, unexpected = model.load_state_dict(blob["state"], strict=False)
+    missing, unexpected = model.load_state_dict(sd, strict=False)
     expected_lora = {k for k in model.state_dict() if "lora_" in k}
     missing_lora = sorted(expected_lora.intersection(missing))
     if missing_lora:
@@ -141,7 +145,7 @@ def load(model: nn.Module, path: str) -> list[RemovableHandle]:
     unexpected_lora = [k for k in unexpected if "lora_" in k]
     if unexpected_lora:
         raise RuntimeError(f"unexpected lora keys in checkpoint: {unexpected_lora}")
-    saved_fp = blob.get("base_fp", {})
+    saved_fp = json.loads(metadata.get("base_fp", "{}"))
     if saved_fp:
         cur_fp = _base_weight_fingerprint(model)
         diffs = [k for k in saved_fp if saved_fp[k] != cur_fp.get(k)]
