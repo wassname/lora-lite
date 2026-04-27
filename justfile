@@ -9,10 +9,10 @@ test:
 	uv run --extra test pytest -q
 
 smoke:
-	uv run --extra test python tests/smoke.py
+	uv run --extra test --extra benchmark pytest -q tests/test_metamath_smoke.py -k test_metamath_quick_train_save_load
 
 bnb-smoke:
-	uv run --extra test --extra bnb-test python tests/smoke.py --require-bnb
+	uv run --extra test --extra benchmark --extra bnb-test pytest -q tests/test_metamath_smoke.py -k test_attach_on_bnb_loaded_base
 
 build:
 	rm -rf dist
@@ -101,5 +101,5 @@ metamath-queue-all model="Qwen/Qwen3-0.6B-Base" steps="5000" variants="lora piss
 		pueue add \
 			-l "why: benchmark {{model}} ${variant} on MetaMathQA->GSM8K at {{steps}} steps; resolve: outputs/metamath_gsm8k/results/benchmark_results.tsv gets a row with accuracy commit time method argv and result JSON for ${variant}" \
 			-w "$PWD" -o 1 -- \
-			uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py --model {{model}} --variant "$variant" --steps {{steps}} --lr "$lr" "${extra_args[@]}"
+			bash -c "uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py --model {{model}} --variant $variant --steps {{steps}} --lr $lr $(printf '%q ' "${extra_args[@]}")"
 	done
