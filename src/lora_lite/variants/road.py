@@ -117,8 +117,8 @@ class ROAD:
         _validate_group_geometry(d_out, cfg.group_size)
         size = _road_param_size(d_out, cfg.road_variant)
         return dict(
-            lora_road_theta=ParamSpec((size,), init="near_zero"),
-            lora_road_alpha=ParamSpec((size,), init="near_one"),
+            lora_road_theta=ParamSpec((size,), init="zeros"),
+            lora_road_alpha=ParamSpec((size,), init="ones"),
         )
 
     @staticmethod

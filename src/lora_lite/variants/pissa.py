@@ -38,8 +38,8 @@ class PiSSA:
     @staticmethod
     def param_specs(d_in, d_out, cfg):
         return dict(
-            lora_A=ParamSpec((cfg.r, d_in), init="near_zero"),
-            lora_B=ParamSpec((d_out, cfg.r), init="near_zero"),
+            lora_A=ParamSpec((cfg.r, d_in), init="zeros"),
+            lora_B=ParamSpec((d_out, cfg.r), init="zeros"),
         )
 
     @staticmethod

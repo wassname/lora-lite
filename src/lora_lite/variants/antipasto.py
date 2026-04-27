@@ -7,7 +7,7 @@ wassname 2026  https://arxiv.org/abs/2601.07473
     R = block_diag(Cayley(skew(rot_T)));  Vh_eff = R @ Vh (or U_eff = U @ R.T)
     y = x @ W_res.T + ((x @ Vh_eff.T) * (S + delta_s)) @ U_eff.T
 
-Identity at t=0: rot_T~0 -> R≈I, delta_s~0 -> y ≈ x @ W^T (fp32 SVD round-trip). near_zero init breaks bf16 symmetry without meaningfully breaking identity (~1e-4 noise around zero).
+Identity at t=0: rot_T=0 -> R=I, delta_s~4e-4 -> y ≈ x @ W^T (fp32 SVD round-trip, tiny positive bias on delta_s breaks sign symmetry).
 
 Scope cut vs antipasto3: this is a fine-tuning adapter, not the full runtime
 steering interface. There is no per-call alpha, so it does not expose the
@@ -41,8 +41,8 @@ class AntiPaSTOConfig(AdapterConfig):
     block_size: int = 4
     # Cayley map saturation: bounds rotation angle to ~max_rotation_angle radians.
     max_rotation_angle: float = 0.5
-    # Which singular basis to rotate: 'V' (input) or 'U' (output).
-    rotate_basis: Literal["V", "U"] = "V"
+    # Which singular basis to rotate: 'V' (input), 'U' (output), or 'none'.
+    rotate_basis: Literal["V", "U", "none"] = "V"
 
 
 def _cayley(skew: torch.Tensor) -> torch.Tensor:
@@ -75,17 +75,21 @@ class AntiPaSTO:
         bs = int(cfg.block_size)
         if r % bs != 0:
             raise ValueError(f"AntiPaSTO requires r={r} divisible by block_size={bs}")
-        n_blocks = r // bs
-        n_triu = bs * (bs - 1) // 2
-        return dict(
+        specs = dict(
             # Frozen SVD components captured at init.
             lora_U=ParamSpec((d_out, r), init="zeros", trainable=False, as_buffer=True),
             lora_S=ParamSpec((r,), init="zeros", trainable=False, as_buffer=True),
             lora_Vh=ParamSpec((r, d_in), init="zeros", trainable=False, as_buffer=True),
-            # Trainable: per-singular-value delta + block-diagonal Cayley rotation.
-            lora_delta_s=ParamSpec((r,), init="near_zero"),
-            lora_rot_T=ParamSpec((n_blocks, n_triu), init="near_zero"),
+            # Trainable: per-singular-value delta.
+            # antipasto3 uses 4e-4 + N(0, 4e-4): small positive bias breaks sign
+            # symmetry (rotation alone can't); zero-init works but trains slower.
+            lora_delta_s=ParamSpec((r,), init=lambda t: t.normal_(0, 4e-4).add_(4e-4)),
         )
+        if cfg.rotate_basis != "none":
+            n_blocks = r // bs
+            n_triu = bs * (bs - 1) // 2
+            specs["lora_rot_T"] = ParamSpec((n_blocks, n_triu), init="zeros")
+        return specs
 
     @staticmethod
     def init(layer: nn.Module, cfg) -> None:
@@ -104,6 +108,8 @@ class AntiPaSTO:
             layer.lora_Vh.copy_(Vhr.to(layer.lora_Vh.dtype))
             W_res = (W - (Ur * Sr) @ Vhr).to(layer.weight.dtype)
             layer.weight.data.copy_(W_res)
+
+            # FIXME antipasto needs an init from data too
 
     @staticmethod
     def forward(

@@ -41,7 +41,7 @@ class IA3:
 
     @staticmethod
     def param_specs(d_in, d_out, cfg):
-        return dict(lora_g=ParamSpec((d_out,), init="near_one"))
+        return dict(lora_g=ParamSpec((d_out,), init="ones"))
 
     @staticmethod
     def init(layer: nn.Module, cfg) -> None:
@@ -62,7 +62,7 @@ class IA3FF:
 
     @staticmethod
     def param_specs(d_in, d_out, cfg):
-        return dict(lora_g=ParamSpec((d_in,), init="near_one"))
+        return dict(lora_g=ParamSpec((d_in,), init="ones"))
 
     @staticmethod
     def init(layer: nn.Module, cfg) -> None:

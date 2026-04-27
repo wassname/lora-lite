@@ -21,12 +21,11 @@ class ParamSpec:
         elif self.init == "zeros":
             t.zero_()
         elif self.init == "near_zero":
-            # ~identity init but breaks bf16 symmetry: N(0, eps) where eps is a few
-            # orders above bf16 spacing at 0 (eps_bf16 ~ 1.2e-7). Avoids dead-grad
-            # from exact-zero -> exact-zero in low-precision training.
+            # avoid exact-zero dead zone; N(0, 1e-4) is small enough to be
+            # ~identity but nonzero so gradients always have somewhere to go
             t.normal_(0, 1e-4)
         elif self.init == "near_one":
-            # ~identity init for gate/scale params: 1 + N(0, eps)
+            # avoid exact-one dead zone; 1 + N(0, 1e-4)
             t.fill_(1.0).add_(torch.randn_like(t).mul_(1e-4))
         elif self.init == "ones":
             t.fill_(1.0)
