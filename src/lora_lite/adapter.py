@@ -98,34 +98,12 @@ def detach(model: nn.Module) -> None:
     delattr(model, _ATTACHED_ATTR)
 
 
-def _base_weight_fingerprint(model: nn.Module) -> dict[str, str]:
-    """Per-target fingerprint of the (post-init) base weights so PiSSA-style
-    variants that mutate `layer.weight` can fail loud on base mismatch.
-    Uses a cheap fp32 sum-of-squares + shape signature; not cryptographic.
-    """
-    state = getattr(model, _ATTACHED_ATTR, None)
-    if state is None:
-        return {}
-    fp = {}
-    for name, layer in model.named_modules():
-        if not hasattr(layer, "_lora_variant"):
-            continue
-        if name not in state["targets"]:
-            continue
-        w = layer.weight.detach().to(torch.float32, copy=False)
-        fp[name] = f"{tuple(w.shape)}|{float((w * w).sum()):.6e}"
-    return fp
-
-
 def save(model: nn.Module, path: str) -> None:
     state = getattr(model, _ATTACHED_ATTR, None)
     if state is None:
         raise RuntimeError("no adapter attached; call attach() first")
     sd = {k: v.detach().cpu() for k, v in model.state_dict().items() if "lora_" in k}
-    metadata = {
-        "cfg": json.dumps(state["cfg"].to_dict()),
-        "base_fp": json.dumps(_base_weight_fingerprint(model)),
-    }
+    metadata = {"cfg": json.dumps(state["cfg"].to_dict())}
     from safetensors.torch import save_file
     save_file(sd, path, metadata=metadata)
 
@@ -145,14 +123,4 @@ def load(model: nn.Module, path: str) -> list[RemovableHandle]:
     unexpected_lora = [k for k in unexpected if "lora_" in k]
     if unexpected_lora:
         raise RuntimeError(f"unexpected lora keys in checkpoint: {unexpected_lora}")
-    saved_fp = json.loads(metadata.get("base_fp", "{}"))
-    if saved_fp:
-        cur_fp = _base_weight_fingerprint(model)
-        diffs = [k for k in saved_fp if saved_fp[k] != cur_fp.get(k)]
-        if diffs:
-            raise RuntimeError(
-                f"base weight fingerprint mismatch on {len(diffs)} layer(s) "
-                f"(e.g. {diffs[0]}). For PiSSA the saved adapter assumes the same "
-                "base; reload onto the original model or re-run init."
-            )
     return handles

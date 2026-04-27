@@ -29,7 +29,12 @@ def _classify(m: nn.Module, d_model: int, name: str) -> str:
     if do == d_model and di != d_model:
         return "writer"
     if di == d_model and do == d_model:
-        return "writer" if any(s in name for s in ("o_proj", "out_proj")) else "reader"
+        if any(s in name for s in ("o_proj", "out_proj", "down_proj")):
+            return "writer" 
+        elif any(s in name for s in ("q_proj", "k_proj", "v_proj", "kq_proj")):
+            return "reader"
+        else:
+            raise ValueError(f"ambiguous role for {name} with in/out features {di}/{do}")
     return "inner"
 
 
