@@ -37,6 +37,8 @@ from ..config import AdapterConfig, register_config
 @dataclass
 class AntiPaSTOConfig(AdapterConfig):
     variant: str = "antipasto"
+    # Higher default than LoRA (r=8) since trainable params scale as r + r/bs*bs*(bs-1)/2, not r*(d_in+d_out).
+    r: int = 256
     # Block size for the block-diagonal Cayley rotation. r must be divisible by it.
     block_size: int = 4
     # Cayley map saturation: bounds rotation angle to ~max_rotation_angle radians.
@@ -126,24 +128,23 @@ class AntiPaSTO:
         S = layer.lora_S.to(x.dtype)                          # (r,)
         Vh = layer.lora_Vh.to(x.dtype)                        # (r, d_in)
 
-        R_blocks = _build_rotation(layer.lora_rot_T.float(), bs, max_angle).to(x.dtype)
-        n_blocks = R_blocks.shape[0]                          # R_blocks: (n, bs, bs)
-
-        # Apply block-diagonal R per-block via einsum, never materializing (r,r).
-        if rotate_basis == "V":
-            # Vh_eff = R @ Vh, viewed block-wise on the r-axis.
-            Vh_blocks = rearrange(Vh, "(n a) i -> n a i", n=n_blocks)
-            Vh_rot = einsum(R_blocks, Vh_blocks, "n a b, n b i -> n a i")
-            Vh_eff = rearrange(Vh_rot, "n a i -> (n a) i")
-            U_eff = U
-        elif rotate_basis == "U":
-            # U_eff = U @ R.T, viewed block-wise on the r-axis.
-            U_blocks = rearrange(U, "d (n b) -> d n b", n=n_blocks)
-            U_rot = einsum(U_blocks, R_blocks, "d n b, n c b -> d n c")
-            U_eff = rearrange(U_rot, "d n c -> d (n c)")
-            Vh_eff = Vh
+        if rotate_basis == "none":
+            U_eff, Vh_eff = U, Vh
         else:
-            raise ValueError(f"rotate_basis must be 'U' or 'V', got {rotate_basis!r}")
+            R_blocks = _build_rotation(layer.lora_rot_T.float(), bs, max_angle).to(x.dtype)
+            n_blocks = R_blocks.shape[0]                      # R_blocks: (n, bs, bs)
+            if rotate_basis == "V":
+                Vh_blocks = rearrange(Vh, "(n a) i -> n a i", n=n_blocks)
+                Vh_rot = einsum(R_blocks, Vh_blocks, "n a b, n b i -> n a i")
+                Vh_eff = rearrange(Vh_rot, "n a i -> (n a) i")
+                U_eff = U
+            elif rotate_basis == "U":
+                U_blocks = rearrange(U, "d (n b) -> d n b", n=n_blocks)
+                U_rot = einsum(U_blocks, R_blocks, "d n b, n c b -> d n c")
+                U_eff = rearrange(U_rot, "d n c -> d (n c)")
+                Vh_eff = Vh
+            else:
+                raise ValueError(f"rotate_basis must be 'U', 'V', or 'none', got {rotate_basis!r}")
 
         S_eff = S + layer.lora_delta_s.to(x.dtype)            # (r,)
         h = einsum(x, Vh_eff, "... i, r i -> ... r")          # x @ Vh_eff.T
