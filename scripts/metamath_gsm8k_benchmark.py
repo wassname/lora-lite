@@ -52,6 +52,7 @@ class BenchmarkConfig:
     alpha: float = 64.0
     delora_lambda0: float = 0.1
     road_group_size: int = 64
+    antipasto_rotate_basis: Literal["V", "U", "none"] = "V"
     target_name: list[str] = field(default_factory=lambda: list(DEFAULT_TARGETS))
     layers: str = "all"
     train_dataset: str = "meta-math/MetaMathQA"
@@ -123,6 +124,8 @@ def cfg_for_variant(args: BenchmarkConfig, dtype: torch.dtype) -> ll.AdapterConf
     extra = {"lambda0": args.delora_lambda0} if args.variant == "delora" else {}
     if args.variant == "road":
         extra = {"group_size": args.road_group_size}
+    if args.variant == "antipasto":
+        extra = {"rotate_basis": args.antipasto_rotate_basis}
     return CFG_BY_VARIANT[args.variant](
         r=args.r,
         alpha=args.r if args.variant == "pissa" else args.alpha,

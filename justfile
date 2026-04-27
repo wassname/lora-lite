@@ -88,6 +88,7 @@ bench-variant model variant steps="5000":
 		delora) lr=1e-3 ;;
 		ia3)    lr=5e-3; target='(k_proj|v_proj)$' ;;
 		ia3_ff) lr=5e-3; target='(down_proj)$' ;;
+		antipasto) lr=5e-3 ;;  # small params need higher lr
 	esac
 	exec uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py \
 		--model '{{model}}' \
@@ -95,7 +96,7 @@ bench-variant model variant steps="5000":
 		--steps {{steps}} \
 		--lr "$lr" \
 		--target-name "$target" \
-		--layers all --r 32 --alpha 64
+		--layers all --r 32 --alpha 64 "$@"
 
 metamath-queue-all model="Qwen/Qwen3-0.6B-Base" steps="5000" variants="lora pissa delora dora hra ia3 ia3_ff eva antipasto":
 	#!/usr/bin/env bash
