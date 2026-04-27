@@ -442,7 +442,7 @@ def print_final_report(row: dict[str, Any], result_path: Path, mode: str) -> Non
     print("SHOULD: grad>0, dθ>0, base_grad_leaks=0; test/valid_acc meaningful only in benchmark mode. ELSE adapter or eval wiring is dead/wrong.")
     print()
     # ordered: most important / shortest columns first
-    display_keys = ["variant", "test_acc", "valid_acc", "grad", "dθ", "base_grad_leaks", "steps", "samples", "loss0", "lossN", "commit"]
+    display_keys = ["variant", "test_acc", "valid_acc", "params_M", "peak_mem_GB", "grad", "dθ", "base_grad_leaks", "steps", "samples", "loss0", "lossN", "commit"]
     if "perturb" in row:
         display_keys += ["perturb", "reload"]
     display_keys += ["run_id"]
@@ -480,6 +480,8 @@ def append_results_row(
         "method": args.variant,
         "steps": args.steps,
         "samples": result["train_samples"],
+        "params_M": round(result["trainable_param_count"] / 1e6, 4),
+        "peak_mem_GB": round(result.get("peak_cuda_mem_gb", 0.0), 3),
         "model": args.model,
         "commit": run_commit[:12],
         "wall_time_s": round(result["wall_time_s"]),
@@ -530,10 +532,13 @@ def run(args: BenchmarkConfig) -> dict[str, Any]:
         probe_metrics = probe_before_train(model, batches[0], attached["targets"])
     model.train()
 
+    if args.device == "cuda":
+        torch.cuda.reset_peak_memory_stats()
     started = time.time()
     train_metrics = train(model, batches, args)
     valid_metrics = evaluate(model, tokenizer, datasets["valid"], args, "valid")
     test_metrics = evaluate(model, tokenizer, datasets["test"], args, "test")
+    peak_mem_gb = (torch.cuda.max_memory_allocated() / 1024**3) if args.device == "cuda" else 0.0
 
     adapter_path = out_dir / "adapter.safetensors"
     ll.save(model, str(adapter_path))
@@ -581,6 +586,7 @@ def run(args: BenchmarkConfig) -> dict[str, Any]:
         "probe": probe_metrics,
         "adapter_path": str(adapter_path),
         "wall_time_s": time.time() - started,
+        "peak_cuda_mem_gb": peak_mem_gb,
     }
     result_path = out_dir / "result.json"
     result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
@@ -604,6 +610,8 @@ def run(args: BenchmarkConfig) -> dict[str, Any]:
         "base_grad_leaks": train_metrics["base_grad_leaks"],
         "valid_acc": valid_metrics["accuracy"],
         "test_acc": test_metrics["accuracy"],
+        "params_M": round(result["trainable_param_count"] / 1e6, 4),
+        "peak_mem_GB": round(peak_mem_gb, 3),
         "commit": run_commit[:12],
         "result": str(result_path),
     }

@@ -12,6 +12,7 @@ build/
 dist/
 *.egg-info/
 logs/
+docs/spec/
 outputs/
 tests/_artifacts/
 docs/papers/*.pdf

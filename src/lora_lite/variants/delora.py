@@ -45,7 +45,7 @@ class DeLoRA:
         lam0 = float(cfg.lambda0)
         return dict(
             lora_A=ParamSpec((cfg.r, d_in), init="kaiming"),
-            lora_B=ParamSpec((d_out, cfg.r), init="zeros"),
+            lora_B=ParamSpec((d_out, cfg.r), init="zeros"),  # exact-zero for identity: lambda scales B@A
             lora_lambda=ParamSpec((), init=lambda t: t.fill_(lam0)),
             # ||W||_2 per input channel; frozen buffer captured at init.
             lora_wnorm=ParamSpec((d_in,), init="ones", trainable=False, as_buffer=True),

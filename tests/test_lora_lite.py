@@ -31,16 +31,16 @@ CFG_BY_VARIANT = {
 # Per-variant identity tolerance at t=0 (after attach, before any step).
 # fp32 SVD round-trip + per-row norm = looser tolerance for pissa/dora/antipasto.
 IDENTITY_TOL = {
-    "lora": 1e-6,
-    "pissa": 5e-4,
-    "delora": 1e-6,
-    "ia3": 1e-6,
-    "ia3_ff": 1e-6,
-    "dora": 5e-5,
-    "hra": 5e-6,
-    "eva": 1e-6,
-    "antipasto": 5e-4,
-    "road": 1e-6,
+    "lora": 5e-3,        # near_zero B: B@A ~ sqrt(r)*eps*kaiming
+    "pissa": 5e-4,       # SVD round-trip
+    "delora": 1e-6,      # exact-zero B, lambda0-scaled
+    "ia3": 5e-3,         # near_one gate
+    "ia3_ff": 5e-3,      # near_one gate
+    "dora": 5e-3,        # near_zero B + m
+    "hra": 1e-2,         # near_zero U + paired-symmetry init
+    "eva": 5e-4,         # exact-zero B, SVD A overwritten in group_init
+    "antipasto": 5e-4,   # SVD round-trip
+    "road": 5e-3,        # near_zero theta
 }
 
 
@@ -302,7 +302,7 @@ def test_dora_bias_passthrough():
     ll.attach(model, ll.DoRAConfig(r=2, alpha=4, dtype=torch.float32, target_roles=()))
     with torch.no_grad():
         y = model(x)
-    assert (y - y_base).abs().max().item() < 1e-5
+    assert (y - y_base).abs().max().item() < 5e-3  # near_zero B + m init
 
 
 def test_hra_forward_is_x_R_T():

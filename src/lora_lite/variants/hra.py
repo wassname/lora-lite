@@ -46,7 +46,7 @@ class HRA:
         return dict(
             # Householder vectors stacked as rows (one vector per rank slot)
             # init done in init() to enforce paired rows -> R = I at t=0.
-            lora_U=ParamSpec((cfg.r, d_in), init="zeros"),
+            lora_U=ParamSpec((cfg.r, d_in), init="near_zero"),
         )
 
     @staticmethod

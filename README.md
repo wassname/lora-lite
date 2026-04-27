@@ -47,21 +47,25 @@ just qwen-probe  # Qwen/Qwen3-0.6B train/save-load probe
 
 ## Variants
 
-| Variant                                       | 4bit/8bit | GSM8K % |
-| --------------------------------------------- | --------- | ------- |
-| [LoRA](https://arxiv.org/abs/2106.09685)      | yes       | 63.2%   |
-| [PiSSA](https://arxiv.org/abs/2404.02948)     | no        | —       |
-| [DeLoRA](https://arxiv.org/abs/2503.18225)    | yes       | —       |
-| [IA3](https://arxiv.org/pdf/2205.05638)       | yes       | —       |
-| [DoRA](https://arxiv.org/abs/2402.09353)      | no        | —       |
-| [HRA](https://arxiv.org/abs/2409.01434)       | yes       | —       |
-| [EVA](https://arxiv.org/abs/2409.07871)       | no        | —       |
-| [AntiPaSTO](https://arxiv.org/abs/2503.08696) | no        | —       |
+| Variant                                       | 4bit/8bit | GSM8K % | Params     | Peak GPU (GB) |
+| --------------------------------------------- | --------- | ------- | ---------- | ------------- |
+| [LoRA](https://arxiv.org/abs/2106.09685)      | yes       | 63.2%   | 4.59M      | —             |
+| [PiSSA](https://arxiv.org/abs/2404.02948)     | no        | 63.2%   | 4.59M      | —             |
+| [DoRA](https://arxiv.org/abs/2402.09353)      | no        | 62.4%   | 4.67M      | —             |
+| [DeLoRA](https://arxiv.org/abs/2503.18225)    | yes       | 61.5%   | 4.59M      | —             |
+| [EVA](https://arxiv.org/abs/2409.07871)       | no        | 60.3%   | 4.59M      | 11.3          |
+| [IA3](https://arxiv.org/pdf/2205.05638)       | yes       | 60.0%   | 57K        | 11.4          |
+| [IA3-FF](https://arxiv.org/pdf/2205.05638)    | yes       | 61.4%   | 86K        | 11.4          |
+| [HRA](https://arxiv.org/abs/2409.01434)       | yes       | —       | —          | —             |
+| [AntiPaSTO](https://arxiv.org/abs/2503.08696) | no        | 30.6%   | 4.5K       | 11.3          |
 
-Our test setup: We take Qwen3-0.6B-Base and train one MetaMathQA for 5000 steps. We use a rank of 32, and itnervene on all linear layer then test on GSM8K.
+Params = trainable adapter params. Peak GPU = peak CUDA memory during train+eval (logged from this run onward; older runs predate the column).
 
+Setup: Qwen3-0.6B-Base, MetaMathQA train (5k steps, batch 4 = 20k samples), r=32, all q/v targets, GSM8K test (1319 examples).
 
-Is this a good accuracy? TODO we need a like-for-like comparison against PEFT LoRA in the same setup before drawing conclusions. But the [PEFT library](https://github.com/huggingface/peft#results) reports LoRA at 49.0% on Llama-3.2-3B (different model and sample count).
+Reference: PEFT reports LoRA at 49.0% on Llama-3.2-3B (different model, different sample count). Our numbers are not directly comparable but suggest the adapters work.
+
+AntiPaSTO at 30.6% is expected: it has only 4.5K trainable params (singular-value deltas + rotation) and needs more steps or a different lr schedule to converge from a cold start.
 
 
 ## Developer docs

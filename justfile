@@ -80,10 +80,14 @@ bench-variant model variant steps="5000":
 	set -euo pipefail
 	lr=1e-4
 	target='(q_proj|v_proj)$'
+	# IA3 lr: paper uses 3e-3 to 1e-2 (Liu et al. 2022 §3.3). Also a hard
+	# bf16 floor: lora_g inits to 1.0 where bf16 spacing is ~7.8e-3, so
+	# AdamW updates with lr<<3.9e-3 round back to 1.0 and the param freezes.
+	# 5e-3 is paper-faithful AND clears the bf16 round-to-nearest threshold.
 	case "{{variant}}" in
 		delora) lr=1e-3 ;;
-		ia3)    lr=1e-3; target='(k_proj|v_proj)$' ;;
-		ia3_ff) lr=1e-3; target='(down_proj)$' ;;
+		ia3)    lr=5e-3; target='(k_proj|v_proj)$' ;;
+		ia3_ff) lr=5e-3; target='(down_proj)$' ;;
 	esac
 	exec uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py \
 		--model '{{model}}' \

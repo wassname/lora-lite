@@ -40,8 +40,8 @@ class EVA:
     def param_specs(d_in, d_out, cfg):
         return dict(
             # A trainable per peft: EVA only changes the init.
-            lora_A=ParamSpec((cfg.r, d_in), init="zeros"),
-            lora_B=ParamSpec((d_out, cfg.r), init="zeros"),
+            lora_A=ParamSpec((cfg.r, d_in), init="zeros"),  # overwritten by group_init SVD basis
+            lora_B=ParamSpec((d_out, cfg.r), init="zeros"),  # exact-zero for identity
         )
 
     @staticmethod

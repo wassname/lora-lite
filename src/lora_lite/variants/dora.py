@@ -32,9 +32,9 @@ class DoRA:
     def param_specs(d_in, d_out, cfg):
         return dict(
             lora_A=ParamSpec((cfg.r, d_in), init="kaiming"),
-            lora_B=ParamSpec((d_out, cfg.r), init="zeros"),
+            lora_B=ParamSpec((d_out, cfg.r), init="near_zero"),
             # m is filled from ||W||_c during init(); shape (d_out,)
-            lora_m=ParamSpec((d_out,), init="zeros"),
+            lora_m=ParamSpec((d_out,), init="near_zero"),
         )
 
     @staticmethod

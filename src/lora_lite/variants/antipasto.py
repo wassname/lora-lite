@@ -7,15 +7,13 @@ wassname 2026  https://arxiv.org/abs/2601.07473
     R = block_diag(Cayley(skew(rot_T)));  Vh_eff = R @ Vh (or U_eff = U @ R.T)
     y = x @ W_res.T + ((x @ Vh_eff.T) * (S + delta_s)) @ U_eff.T
 
-Identity at t=0: rot_T=0 -> R=I, delta_s=0 -> y == x @ W^T (fp32 SVD round-trip).
+Identity at t=0: rot_T~0 -> R≈I, delta_s~0 -> y ≈ x @ W^T (fp32 SVD round-trip). near_zero init breaks bf16 symmetry without meaningfully breaking identity (~1e-4 noise around zero).
 
 Scope cut vs antipasto3: this is a fine-tuning adapter, not the full runtime
 steering interface. There is no per-call alpha, so it does not expose the
 bidirectional R(+alpha) / R(-alpha) inference symmetry. The V-basis path uses the
 opposite chirality to antipasto3's default U-basis path, so checkpoints are not
-portable without a sign/basis convention. Zero-init is stricter identity than
-antipasto3's small positive/random symmetry-breaking init, but can leave rotation
-learning to be started by the task gradient rather than init noise.
+portable without a sign/basis convention.
 
 Refs:
   - paper: https://github.com/wassname/AntiPaSTO
@@ -85,8 +83,8 @@ class AntiPaSTO:
             lora_S=ParamSpec((r,), init="zeros", trainable=False, as_buffer=True),
             lora_Vh=ParamSpec((r, d_in), init="zeros", trainable=False, as_buffer=True),
             # Trainable: per-singular-value delta + block-diagonal Cayley rotation.
-            lora_delta_s=ParamSpec((r,), init="zeros"),
-            lora_rot_T=ParamSpec((n_blocks, n_triu), init="zeros"),
+            lora_delta_s=ParamSpec((r,), init="near_zero"),
+            lora_rot_T=ParamSpec((n_blocks, n_triu), init="near_zero"),
         )
 
     @staticmethod

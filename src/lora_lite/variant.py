@@ -10,7 +10,7 @@ from .config import AdapterConfig
 @dataclass
 class ParamSpec:
     shape: tuple[int, ...]
-    init: str | Callable[[torch.Tensor], None] = "zeros"  # 'zeros'|'kaiming'|'ones'|callable(t)
+    init: str | Callable[[torch.Tensor], None] = "near_zero"  # 'zeros'|'near_zero'|'kaiming'|'ones'|callable(t)
     trainable: bool = True
     as_buffer: bool = False  # if True, register_buffer instead of register_parameter
 
@@ -20,6 +20,14 @@ class ParamSpec:
             self.init(t)
         elif self.init == "zeros":
             t.zero_()
+        elif self.init == "near_zero":
+            # ~identity init but breaks bf16 symmetry: N(0, eps) where eps is a few
+            # orders above bf16 spacing at 0 (eps_bf16 ~ 1.2e-7). Avoids dead-grad
+            # from exact-zero -> exact-zero in low-precision training.
+            t.normal_(0, 1e-4)
+        elif self.init == "near_one":
+            # ~identity init for gate/scale params: 1 + N(0, eps)
+            t.fill_(1.0).add_(torch.randn_like(t).mul_(1e-4))
         elif self.init == "ones":
             t.fill_(1.0)
         elif self.init == "kaiming":
