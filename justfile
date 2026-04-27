@@ -73,6 +73,26 @@ metamath-queue variant="lora" steps="5000" model="Qwen/Qwen3-0.6B-Base":
 		-w "$PWD" -o 1 -- \
 		uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py --model {{model}} --variant {{variant}} --steps {{steps}}
 
+# Run a single MetaMathQA->GSM8K benchmark for a given variant.
+# Per-variant lr / target-name defaults are baked in here.
+bench-variant model variant steps="5000":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	lr=1e-4
+	target='(q_proj|v_proj)$'
+	case "{{variant}}" in
+		delora) lr=1e-3 ;;
+		ia3)    lr=1e-3; target='(k_proj|v_proj)$' ;;
+		ia3_ff) lr=1e-3; target='(down_proj)$' ;;
+	esac
+	exec uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py \
+		--model '{{model}}' \
+		--variant '{{variant}}' \
+		--steps {{steps}} \
+		--lr "$lr" \
+		--target-name "$target" \
+		--layers all --r 32 --alpha 64
+
 metamath-queue-all model="Qwen/Qwen3-0.6B-Base" steps="5000" variants="lora pissa delora dora hra ia3 ia3_ff eva antipasto":
 	#!/usr/bin/env bash
 	set -euo pipefail
@@ -80,5 +100,5 @@ metamath-queue-all model="Qwen/Qwen3-0.6B-Base" steps="5000" variants="lora piss
 		pueue add \
 			-l "why: benchmark {{model}} ${variant} on MetaMathQA->GSM8K at {{steps}} steps; resolve: outputs/metamath_gsm8k/results/benchmark_results.tsv gets a row with accuracy commit time method argv and result JSON for ${variant}" \
 			-w "$PWD" -o 1 -- \
-			bash scripts/bench_variant.sh '{{model}}' "$variant" {{steps}}
+			just bench-variant '{{model}}' "$variant" {{steps}}
 	done

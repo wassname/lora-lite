@@ -43,11 +43,11 @@ class HRA:
                 f"HRA symmetric init requires even r; got r={cfg.r}. "
                 "Pick an even rank or use a different variant."
             )
-        return {
+        return dict(
             # Householder vectors stacked as rows (one vector per rank slot)
             # init done in init() to enforce paired rows -> R = I at t=0.
-            "lora_U": ParamSpec((cfg.r, d_in), init="zeros", trainable=True),
-        }
+            lora_U=ParamSpec((cfg.r, d_in), init="zeros"),
+        )
 
     @staticmethod
     def init(layer: nn.Module, cfg) -> None:

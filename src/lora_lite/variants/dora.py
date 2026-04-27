@@ -30,12 +30,12 @@ class DoRA:
 
     @staticmethod
     def param_specs(d_in, d_out, cfg):
-        return {
-            "lora_A": ParamSpec((cfg.r, d_in), init="kaiming", trainable=True),
-            "lora_B": ParamSpec((d_out, cfg.r), init="zeros",  trainable=True),
+        return dict(
+            lora_A=ParamSpec((cfg.r, d_in), init="kaiming"),
+            lora_B=ParamSpec((d_out, cfg.r), init="zeros"),
             # m is filled from ||W||_c during init(); shape (d_out,)
-            "lora_m": ParamSpec((d_out,), init="zeros", trainable=True),
-        }
+            lora_m=ParamSpec((d_out,), init="zeros"),
+        )
 
     @staticmethod
     def init(layer: nn.Module, cfg) -> None:

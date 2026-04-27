@@ -38,11 +38,11 @@ class EVA:
 
     @staticmethod
     def param_specs(d_in, d_out, cfg):
-        return {
+        return dict(
             # A trainable per peft: EVA only changes the init.
-            "lora_A": ParamSpec((cfg.r, d_in), init="zeros", trainable=True),
-            "lora_B": ParamSpec((d_out, cfg.r), init="zeros", trainable=True),
-        }
+            lora_A=ParamSpec((cfg.r, d_in), init="zeros"),
+            lora_B=ParamSpec((d_out, cfg.r), init="zeros"),
+        )
 
     @staticmethod
     def init(layer: nn.Module, cfg) -> None:

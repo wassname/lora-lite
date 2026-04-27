@@ -30,10 +30,10 @@ class LoRA:
 
     @staticmethod
     def param_specs(d_in, d_out, cfg):
-        return {
-            "lora_A": ParamSpec((cfg.r, d_in), init="kaiming", trainable=True),
-            "lora_B": ParamSpec((d_out, cfg.r), init="zeros",  trainable=True),
-        }
+        return dict(
+            lora_A=ParamSpec((cfg.r, d_in), init="kaiming"),
+            lora_B=ParamSpec((d_out, cfg.r), init="zeros"),
+        )
 
     @staticmethod
     def init(layer: nn.Module, cfg) -> None:

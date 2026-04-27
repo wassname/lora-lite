@@ -116,10 +116,10 @@ class ROAD:
     def param_specs(d_in: int, d_out: int, cfg: RoadConfig) -> dict[str, ParamSpec]:
         _validate_group_geometry(d_out, cfg.group_size)
         size = _road_param_size(d_out, cfg.road_variant)
-        return {
-            "lora_road_theta": ParamSpec((size,), init="zeros", trainable=True),
-            "lora_road_alpha": ParamSpec((size,), init="ones", trainable=True),
-        }
+        return dict(
+            lora_road_theta=ParamSpec((size,), init="zeros"),
+            lora_road_alpha=ParamSpec((size,), init="ones"),
+        )
 
     @staticmethod
     def init(layer: nn.Module, cfg: RoadConfig) -> None:

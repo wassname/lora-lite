@@ -43,15 +43,13 @@ class DeLoRA:
     @staticmethod
     def param_specs(d_in, d_out, cfg):
         lam0 = float(cfg.lambda0)
-        return {
-            "lora_A": ParamSpec((cfg.r, d_in), init="kaiming", trainable=True),
-            "lora_B": ParamSpec((d_out, cfg.r), init="zeros",   trainable=True),
-            "lora_lambda": ParamSpec(
-                (), init=lambda t: t.fill_(lam0), trainable=True
-            ),
+        return dict(
+            lora_A=ParamSpec((cfg.r, d_in), init="kaiming"),
+            lora_B=ParamSpec((d_out, cfg.r), init="zeros"),
+            lora_lambda=ParamSpec((), init=lambda t: t.fill_(lam0)),
             # ||W||_2 per input channel; frozen buffer captured at init.
-            "lora_wnorm": ParamSpec((d_in,), init="ones", trainable=False, as_buffer=True),
-        }
+            lora_wnorm=ParamSpec((d_in,), init="ones", trainable=False, as_buffer=True),
+        )
 
     @staticmethod
     def init(layer: nn.Module, cfg) -> None:

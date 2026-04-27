@@ -79,15 +79,15 @@ class AntiPaSTO:
             raise ValueError(f"AntiPaSTO requires r={r} divisible by block_size={bs}")
         n_blocks = r // bs
         n_triu = bs * (bs - 1) // 2
-        return {
+        return dict(
             # Frozen SVD components captured at init.
-            "lora_U": ParamSpec((d_out, r), init="zeros", trainable=False, as_buffer=True),
-            "lora_S": ParamSpec((r,), init="zeros", trainable=False, as_buffer=True),
-            "lora_Vh": ParamSpec((r, d_in), init="zeros", trainable=False, as_buffer=True),
+            lora_U=ParamSpec((d_out, r), init="zeros", trainable=False, as_buffer=True),
+            lora_S=ParamSpec((r,), init="zeros", trainable=False, as_buffer=True),
+            lora_Vh=ParamSpec((r, d_in), init="zeros", trainable=False, as_buffer=True),
             # Trainable: per-singular-value delta + block-diagonal Cayley rotation.
-            "lora_delta_s": ParamSpec((r,), init="zeros", trainable=True),
-            "lora_rot_T": ParamSpec((n_blocks, n_triu), init="zeros", trainable=True),
-        }
+            lora_delta_s=ParamSpec((r,), init="zeros"),
+            lora_rot_T=ParamSpec((n_blocks, n_triu), init="zeros"),
+        )
 
     @staticmethod
     def init(layer: nn.Module, cfg) -> None:
