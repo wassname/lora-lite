@@ -101,7 +101,7 @@ class EVA:
                 )
             # full_matrices=False -> Vh shape (min(N,d_in), d_in); take top-r rows
             _, _, Vh = torch.linalg.svd(X, full_matrices=False)
-            A = Vh[: cfg.r, :].to(layer.lora_A.dtype).to(layer.lora_A.device)
+            A = Vh[: cfg.r, :].to(layer.lora_A)
             with torch.no_grad():
                 layer.lora_A.copy_(A)
 
