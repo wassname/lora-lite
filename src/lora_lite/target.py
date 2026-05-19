@@ -13,7 +13,6 @@ def is_linear_like(m: nn.Module) -> bool:
         hasattr(m, "in_features")
         and hasattr(m, "out_features")
         and hasattr(m, "weight")
-        and callable(m)
     )
 
 

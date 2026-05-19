@@ -457,10 +457,7 @@ def print_final_report(row: dict[str, Any], result_path: Path, mode: str) -> Non
 
 
 def current_git_commit() -> str:
-    try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return "unknown"
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 
 
 def append_results_row(

@@ -92,22 +92,6 @@ def _apply_road(
     return y * first_col + rotate_half_y * second_col
 
 
-def _road_matrix(
-    road_variant: str,
-    group_size: int,
-    road_theta: torch.Tensor,
-    road_alpha: torch.Tensor,
-) -> torch.Tensor:
-    """Explicit PEFT merge matrix. Used for tests and small-debug inspection."""
-    first_col, second_col = _prepare_cols(road_variant, group_size, road_theta, road_alpha)
-    size = second_col.shape[0]
-    output = torch.diag(first_col)
-    swapped_second_col = second_col.reshape(-1, 2, group_size // 2)[:, [1, 0], :].flatten()
-    rotated_diag_second_col = torch.diag(swapped_second_col).reshape(-1, 2, group_size // 2, size)[:, [1, 0], :, :]
-    rotated_diag_second_col[:, 0, :, :] *= -1
-    return output + rotated_diag_second_col.reshape(size, size)
-
-
 @register
 class ROAD:
     name = "road"
