@@ -18,7 +18,6 @@ Refs:
     (offline: docs/refs/peft_delora_layer.py)
 """
 import torch
-from einops import einsum
 from jaxtyping import Float
 from torch import nn, Tensor as T
 from dataclasses import dataclass
@@ -70,11 +69,11 @@ class DeLoRA:
         cfg = layer._lora_cfg
         A = layer.lora_A                                   # (r, d_in)
         B = layer.lora_B                                   # (d_out, r)
-        x_scaled = x * layer.lora_wnorm                    # (..., d_in)
-        h = einsum(x_scaled, A, "... i, r i -> ... r")
+        x_scaled = x.to(A.dtype) * layer.lora_wnorm.to(A.dtype)  # (..., d_in)
+        h = x_scaled @ A.T
         An = torch.clamp(A.norm(dim=1), min=1e-4)          # (r,)
         Bn = torch.clamp(B.norm(dim=0), min=1e-4)          # (r,)
         scale = (layer.lora_lambda / cfg.r) / (An * Bn)    # (r,)
         h = h * scale
-        delta = einsum(h, B, "... r, o r -> ... o")
-        return y + delta
+        delta = h @ B.T
+        return y + delta.to(y.dtype)

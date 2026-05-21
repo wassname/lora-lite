@@ -13,7 +13,7 @@ Refs:
     (offline: docs/refs/peft_eva.py; example: docs/refs/peft_eva_finetuning.py)
 """
 import torch
-from einops import einsum, rearrange
+from einops import rearrange
 from jaxtyping import Float
 from torch import nn, Tensor as T
 from typing import Iterable
@@ -113,6 +113,7 @@ class EVA:
     ) -> Float[T, '*B o']:
         cfg = layer._lora_cfg
         scale = cfg.alpha / cfg.r
-        h = einsum(x, layer.lora_A, "... i, r i -> ... r")
-        delta = einsum(h, layer.lora_B, "... r, o r -> ... o")
-        return y + scale * delta
+        xA = x.to(layer.lora_A.dtype)
+        h = xA @ layer.lora_A.T
+        delta = h @ layer.lora_B.T
+        return y + (scale * delta).to(y.dtype)

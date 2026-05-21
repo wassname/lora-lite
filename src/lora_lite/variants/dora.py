@@ -9,7 +9,6 @@ Refs:
     (offline: docs/refs/peft_lora_dora.py)
 """
 import torch
-from einops import einsum
 from jaxtyping import Float
 from torch import nn, Tensor as T
 from dataclasses import dataclass
@@ -59,14 +58,16 @@ class DoRA:
         scale = cfg.alpha / cfg.r
         # Paper §4.3: treat ||V+ΔV||_c as a constant (detach from grad graph) for
         # stability and ~2x lower memory. Match peft (lora_weight.detach + weight_norm.detach).
-        BA = einsum(layer.lora_B, layer.lora_A, "o r, r i -> o i")
+        BA = layer.lora_B @ layer.lora_A
         V = layer.weight + scale * BA.detach()                 # (d_out, d_in)
         v_norm = V.norm(dim=1).clamp_min(1e-12).detach()       # (d_out,)
         # Bias passes through unscaled (matches peft).
         bias = getattr(layer, "bias", None)
         wx = y if bias is None else (y - bias)
-        h = einsum(x, layer.lora_A, "... i, r i -> ... r")
-        delta = einsum(h, layer.lora_B, "... r, o r -> ... o")
-        combined = wx + scale * delta
+        xA = x.to(layer.lora_A.dtype)
+        h = xA @ layer.lora_A.T
+        delta = h @ layer.lora_B.T
+        combined = wx + (scale * delta).to(wx.dtype)
         out = (layer.lora_m / v_norm) * combined
-        return out if bias is None else out + bias
+        out = out if bias is None else out + bias
+        return out.to(y.dtype)

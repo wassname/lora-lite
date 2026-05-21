@@ -224,7 +224,7 @@ class AntiPaSTO:
                 raise ValueError(f"rotate_basis must be 'U', 'V', or 'none', got {rotate_basis!r}")
 
         S_eff = S + layer.lora_delta_s.to(x.dtype)            # (r,)
-        h = einsum(x, Vh_eff, "... i, r i -> ... r")          # x @ Vh_eff.T
+        h = x @ Vh_eff.T                                      # x @ Vh_eff.T
         h = h * S_eff                                         # diag(S_eff)
-        delta = einsum(h, U_eff, "... r, o r -> ... o")       # @ U_eff.T
+        delta = h @ U_eff.T                                   # @ U_eff.T
         return y + delta

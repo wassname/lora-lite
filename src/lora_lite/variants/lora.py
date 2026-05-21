@@ -8,10 +8,8 @@ Refs:
   - peft: https://github.com/huggingface/peft/blob/main/src/peft/tuners/lora/layer.py
     (offline: docs/refs/peft_lora_layer.py)
 """
-from einops import einsum
 from jaxtyping import Float
 from torch import nn, Tensor as T
-import torch
 from dataclasses import dataclass
 
 from ..variant import register, ParamSpec
@@ -47,6 +45,7 @@ class LoRA:
     ) -> Float[T, '*B o']:
         cfg = layer._lora_cfg
         scale = cfg.alpha / cfg.r
-        h = einsum(x, layer.lora_A, "... i, r i -> ... r")
-        delta = einsum(h, layer.lora_B, "... r, o r -> ... o")
-        return y + scale * delta
+        xA = x.to(layer.lora_A.dtype)
+        h = xA @ layer.lora_A.T
+        delta = h @ layer.lora_B.T
+        return y + (scale * delta).to(y.dtype)
