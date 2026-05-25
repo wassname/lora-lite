@@ -53,11 +53,11 @@ just qwen-probe  # Qwen/Qwen3-0.6B train/save-load probe
 | [PiSSA](https://arxiv.org/abs/2404.02948)     | no        | 63.2%   | 4.59M      | 11.3          |
 | [DoRA](https://arxiv.org/abs/2402.09353)      | no        | 62.4%   | 4.67M      | 11.3          |
 | [DeLoRA](https://arxiv.org/abs/2503.18225)    | yes       | 61.5%   | 4.59M      | 11.3          |
-| [AntiPaSTO](https://arxiv.org/abs/2503.08696) | no        | 61.4%   | 35.8K      | 11.5          |
+| [AntiPaSTO](https://arxiv.org/abs/2601.07473) | no        | 61.4%   | 35.8K      | 11.5          |
 | [IA3-FF](https://arxiv.org/pdf/2205.05638)    | yes       | 61.4%   | 86K        | 11.4          |
-| [EVA](https://arxiv.org/abs/2409.07871)       | no        | 60.3%   | 4.59M      | 11.3          |
+| [EVA](https://arxiv.org/abs/2410.07170)       | no        | 60.3%   | 4.59M      | 11.3          |
 | [IA3](https://arxiv.org/pdf/2205.05638)       | yes       | 60.0%   | 57K        | 11.4          |
-| [HRA](https://arxiv.org/abs/2409.01434)       | yes       | 61.6%   | 1.84M      | 11.3          |
+| [HRA](https://arxiv.org/abs/2405.17484)       | yes       | 61.6%   | 1.84M      | 11.3          |
 
 Params = trainable adapter params. Peak GPU = peak CUDA memory during train+eval (logged from this run onward; older runs predate the column).
 
