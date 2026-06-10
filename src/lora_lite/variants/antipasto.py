@@ -42,6 +42,7 @@ class AntiPaSTOConfig(AdapterConfig):
     variant: str = "antipasto"
     # Higher default than LoRA (r=8) since trainable params scale as r + r/bs*bs*(bs-1)/2, not r*(d_in+d_out).
     r: int = 256
+    
     # Block size for the block-diagonal Cayley rotation. r must be divisible by it.
     block_size: int = 4
     # Cayley map saturation: bounds rotation angle to ~max_rotation_angle radians.
@@ -223,6 +224,7 @@ class AntiPaSTO:
             else:
                 raise ValueError(f"rotate_basis must be 'U', 'V', or 'none', got {rotate_basis!r}")
 
+        # FIXME: try lora_delta_s as [r,k] this is because the main limit of this adapter is that it's under parametised here. `reduce(h @ U_eff.T, '... k -> ...')
         S_eff = S + layer.lora_delta_s.to(x.dtype)            # (r,)
         h = x @ Vh_eff.T                                      # x @ Vh_eff.T
         h = h * S_eff                                         # diag(S_eff)
