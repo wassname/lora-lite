@@ -224,7 +224,7 @@ class AntiPaSTO:
             else:
                 raise ValueError(f"rotate_basis must be 'U', 'V', or 'none', got {rotate_basis!r}")
 
-        # FIXME: try lora_delta_s as [r,k] this is because the main limit of this adapter is that it's under parametised here. `reduce(h @ U_eff.T, '... k -> ...')
+        # FIXME: try lora_delta_s as [r,k] this is because the main limit of this adapter is that it's under parametised here. `reduce(h @ U_eff.T, '... k -> ...'). But have to make sure it's not lienarly reducable to one adapter.
         S_eff = S + layer.lora_delta_s.to(x.dtype)            # (r,)
         h = x @ Vh_eff.T                                      # x @ Vh_eff.T
         h = h * S_eff                                         # diag(S_eff)
