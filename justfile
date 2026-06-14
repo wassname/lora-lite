@@ -80,6 +80,7 @@ bench-variant model variant steps="5000":
 	set -euo pipefail
 	lr=1e-4
 	target='(q_proj|v_proj)$'
+	r=32; alpha=64
 	# IA3 lr: paper uses 3e-3 to 1e-2 (Liu et al. 2022 §3.3). Also a hard
 	# bf16 floor: lora_g inits to 1.0 where bf16 spacing is ~7.8e-3, so
 	# AdamW updates with lr<<3.9e-3 round back to 1.0 and the param freezes.
@@ -88,7 +89,10 @@ bench-variant model variant steps="5000":
 		delora) lr=1e-3 ;;
 		ia3)    lr=5e-3; target='(k_proj|v_proj)$' ;;
 		ia3_ff) lr=5e-3; target='(down_proj)$' ;;
-		antipasto*) lr=5e-3 ;;  # small params (gain/block) need higher lr; covers all antipasto_* cores
+		# antipasto cores tune only S-space gain/block (tiny params), so a small
+		# r leaves almost nothing trainable; r=256 is the variant default and
+		# matches the published AntiPaSTO row. alpha=r (no extra scaling).
+		antipasto*) lr=5e-3; r=256; alpha=256 ;;
 	esac
 	exec uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py \
 		--model '{{model}}' \
@@ -96,7 +100,7 @@ bench-variant model variant steps="5000":
 		--steps {{steps}} \
 		--lr "$lr" \
 		--target-name "$target" \
-		--layers all --r 32 --alpha 64 "$@"
+		--layers all --r "$r" --alpha "$alpha"
 
 metamath-queue-all model="Qwen/Qwen3-0.6B-Base" steps="5000" variants="lora pissa delora dora hra ia3 ia3_ff eva antipasto":
 	#!/usr/bin/env bash
