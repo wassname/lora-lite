@@ -34,6 +34,9 @@ CFG_BY_VARIANT = {
     "hra": ll.HRAConfig,
     "eva": ll.EVAConfig,
     "antipasto": ll.AntiPaSTOConfig,
+    "antipasto_rot": ll.AntiPaSTORotConfig,
+    "antipasto_ablate": ll.AntiPaSTOAblateConfig,
+    "antipasto_corda": ll.AntiPaSTOCorDAConfig,
     "road": ll.RoadConfig,
 }
 
@@ -43,7 +46,7 @@ class BenchmarkConfig:
     """MetaMathQA -> GSM8K benchmark config. Tyro turns this into the CLI."""
 
     model: str = "Qwen/Qwen3-0.6B-Base"
-    variant: Literal["lora", "pissa", "delora", "ia3", "ia3_ff", "dora", "hra", "eva", "antipasto", "road"] = "lora"
+    variant: Literal["lora", "pissa", "delora", "ia3", "ia3_ff", "dora", "hra", "eva", "antipasto", "antipasto_rot", "antipasto_ablate", "antipasto_corda", "road"] = "lora"
     mode: Literal["benchmark", "probe"] = "benchmark"
     device: str = "cuda"
     torch_dtype: str = "bfloat16"
@@ -52,6 +55,13 @@ class BenchmarkConfig:
     alpha: float = 64.0
     delora_lambda0: float = 0.1
     road_group_size: int = 64
+    # AntiPaSTO family (gain / corda) runtime knobs.
+    antipasto_coeff: float = 1.0
+    antipasto_suppress_only: bool = False
+    # AntiPaSTO-ablate.
+    antipasto_ablate_k: int = 1
+    antipasto_cov_orient: bool = False
+    # AntiPaSTO-rot (legacy rotation variant) basis to rotate.
     antipasto_rotate_basis: Literal["V", "U", "none"] = "V"
     target_name: list[str] = field(default_factory=lambda: list(DEFAULT_TARGETS))
     layers: str = "all"
@@ -124,8 +134,15 @@ def cfg_for_variant(args: BenchmarkConfig, dtype: torch.dtype) -> ll.AdapterConf
     extra = {"lambda0": args.delora_lambda0} if args.variant == "delora" else {}
     if args.variant == "road":
         extra = {"group_size": args.road_group_size}
-    if args.variant == "antipasto":
+    if args.variant == "antipasto_rot":
         extra = {"rotate_basis": args.antipasto_rotate_basis}
+    if args.variant == "antipasto":
+        extra = {"coeff": args.antipasto_coeff, "suppress_only": args.antipasto_suppress_only}
+    if args.variant == "antipasto_corda":
+        extra = {"coeff": args.antipasto_coeff, "suppress_only": args.antipasto_suppress_only}
+    if args.variant == "antipasto_ablate":
+        extra = {"coeff": args.antipasto_coeff, "k": args.antipasto_ablate_k,
+                 "cov_orient": args.antipasto_cov_orient}
     return CFG_BY_VARIANT[args.variant](
         r=args.r,
         alpha=args.r if args.variant == "pissa" else args.alpha,
@@ -155,7 +172,7 @@ def count_base_grad_leaks(model: torch.nn.Module) -> int:
 
 
 def perturb_first_adapter(model: torch.nn.Module) -> None:
-    priority = ("lora_B", "lora_g", "lora_U", "lora_A", "lora_lambda", "lora_gate", "lora_delta_s", "lora_rot_T", "lora_m", "lora_road_theta", "lora_road_alpha")
+    priority = ("lora_B", "lora_g", "lora_c", "lora_alpha", "lora_U", "lora_A", "lora_lambda", "lora_gate", "lora_delta_s", "lora_m", "lora_road_theta", "lora_road_alpha")
     for key in priority:
         for _, p in model.named_parameters():
             if p.requires_grad and key in _:
