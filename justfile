@@ -88,7 +88,7 @@ bench-variant model variant steps="5000":
 		delora) lr=1e-3 ;;
 		ia3)    lr=5e-3; target='(k_proj|v_proj)$' ;;
 		ia3_ff) lr=5e-3; target='(down_proj)$' ;;
-		antipasto) lr=5e-3 ;;  # small params need higher lr
+		antipasto*) lr=5e-3 ;;  # small params (gain/block) need higher lr; covers all antipasto_* cores
 	esac
 	exec uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py \
 		--model '{{model}}' \
