@@ -67,7 +67,8 @@ class AntiPaSTOArrowConfig(AdapterConfig):
     # Size of the dense interaction block on the top-b singular directions. The ONLY
     # quadratic cost (b^2 params); keep small. b=1 degenerates to antipasto.
     block: int = 8
-    suppress_only: bool = False  # clamp the tail g<=0 (attenuate only); block unaffected
+    suppress_only: bool = False  # clamp the tail g<=0 (attenuate only); block unaffected.
+    #   Tail guarantee holds for coeff>=0; coeff<0 inverts the product and re-amplifies.
     coeff: float = 1.0           # runtime knob: 0=identity, scales both block and tail
     act_pool: Literal["rms", "mean_abs"] = "rms"  # group_init selection, see antipasto
 
@@ -151,6 +152,11 @@ class AntiPaSTOArrow:
             U_full, S_full, Vh_full = torch.linalg.svd(W_orig, full_matrices=False)
             proj = X.to(Vh_full) @ Vh_full.T
             act_mag = proj.pow(2).mean(0).sqrt() if pool == "rms" else proj.abs().mean(0)
+            # Select top-r by score, then re-sort ascending by SVD index. Since svd()
+            # returns S descending, the first b stored dirs (the block's cS[..., :b]) are
+            # the b LARGEST-S among the selected r -- not the b highest-score. Matches the
+            # block's "largest S = where the action lives" intent, but a high-S dir dropped
+            # by score-selection won't be in the block.
             idx = (S_full * act_mag).argsort(descending=True)[:r].sort().values
             Ur, Sr, Vhr = U_full[:, idx], S_full[idx], Vh_full[idx]
             W_res_new = (W_orig - (Ur * Sr) @ Vhr).to(layer.weight.dtype)

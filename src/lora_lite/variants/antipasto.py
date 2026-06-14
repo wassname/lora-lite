@@ -61,7 +61,8 @@ class AntiPaSTOConfig(AdapterConfig):
     r: int = 256
     # Per-direction reweighting is S_eff = S * (1 + ELU(coeff * g)). See forward()
     # for the why; identity at g=0 or coeff=0, positive always, no free bound knob.
-    suppress_only: bool = False  # clamp g<=0 -> factor in (0,1]: attenuation only
+    suppress_only: bool = False  # clamp g<=0 -> factor in (0,1]: attenuation only.
+    #   Guarantee holds for coeff>=0; coeff<0 inverts the product and re-amplifies.
     # Runtime steering scale. 0 = identity. <0 inverts (swaps amplify/suppress).
     coeff: float = 1.0
     # group_init Wanda-style pooling of |X @ Vh[i]|: 'rms' is outlier-sensitive

@@ -61,7 +61,8 @@ class AntiPaSTOCorDAConfig(AdapterConfig):
     r: int = 256
     cov_eps: float = 1e-3        # damping on C eigenvalues; guards C^{-1/2} on rare dirs
     coeff: float = 1.0           # runtime steer knob: 0=identity, scales trained g
-    suppress_only: bool = False  # clamp g<=0 (attenuate only; no amplification)
+    suppress_only: bool = False  # clamp g<=0 (attenuate only) -- for coeff>=0;
+    #   coeff<0 inverts the product (coeff*g>=0) and re-amplifies.
 
 
 def _gain(S: T, g: T, coeff: float, suppress_only: bool) -> T:
