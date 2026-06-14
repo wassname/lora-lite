@@ -31,11 +31,13 @@ SPEC.loader.exec_module(benchmark)
 
 
 VARIANTS = ["lora", "pissa", "delora", "ia3", "ia3_ff", "dora", "hra", "eva",
-            "antipasto", "antipasto_rot", "antipasto_ablate", "antipasto_corda", "road"]
+            "antipasto", "antipasto_rot", "antipasto_ablate", "antipasto_corda",
+            "antipasto_arrow", "road"]
 # Variants that fail loud when attached on a bnb-loaded base (read dense weight in init).
 # delora/eva also read weight but currently silently dequant -- they produce sane attach,
 # so we don't expect a raise from them in the attach-only smoke.
-BNB_RAISERS = {"pissa", "dora", "antipasto", "antipasto_rot", "antipasto_ablate", "antipasto_corda"}
+BNB_RAISERS = {"pissa", "dora", "antipasto", "antipasto_rot", "antipasto_ablate",
+               "antipasto_corda", "antipasto_arrow"}
 TINY_MODEL = "hf-internal-testing/tiny-random-LlamaForCausalLM"
 
 HAS_CUDA = torch.cuda.is_available()
@@ -57,6 +59,7 @@ def quick_cfg(variant: str, tmp_path: Path, quantization: str = "none") -> "benc
         quantization=quantization,
         r=4,
         alpha=8,
+        antipasto_block=2,  # antipasto_arrow needs block < r (r=4 here)
         target_name=target_name,
         layers="all",
         steps=2,

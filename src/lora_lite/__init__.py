@@ -23,6 +23,7 @@ from .variants.antipasto import AntiPaSTOConfig
 from .variants.antipasto_rot import AntiPaSTORotConfig
 from .variants.antipasto_ablate import AntiPaSTOAblateConfig
 from .variants.antipasto_corda import AntiPaSTOCorDAConfig
+from .variants.antipasto_arrow import AntiPaSTOArrowConfig
 from .variants.road import RoadConfig
 
 __all__ = [
@@ -39,6 +40,7 @@ __all__ = [
     "AntiPaSTORotConfig",
     "AntiPaSTOAblateConfig",
     "AntiPaSTOCorDAConfig",
+    "AntiPaSTOArrowConfig",
     "RoadConfig",
     "attach",
     "detach",
