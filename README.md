@@ -53,7 +53,7 @@ just qwen-probe  # Qwen/Qwen3-0.6B train/save-load probe
 | [PiSSA](https://arxiv.org/abs/2404.02948)     | no        | 63.2%   | 4.59M      | 11.3          |
 | [DoRA](https://arxiv.org/abs/2402.09353)      | no        | 62.4%   | 4.67M      | 11.3          |
 | [DeLoRA](https://arxiv.org/abs/2503.18225)    | yes       | 61.5%   | 4.59M      | 11.3          |
-| [AntiPaSTO](https://arxiv.org/abs/2601.07473) | no        | 61.4%   | 35.8K      | 11.5          |
+| [AntiPaSTO](https://arxiv.org/abs/2601.07473) | no        | 61.4%   | 14.3K      | 11.3          |
 | [IA3-FF](https://arxiv.org/pdf/2205.05638)    | yes       | 61.4%   | 86K        | 11.4          |
 | [EVA](https://arxiv.org/abs/2410.07170)       | no        | 60.3%   | 4.59M      | 11.3          |
 | [IA3](https://arxiv.org/pdf/2205.05638)       | yes       | 60.0%   | 57K        | 11.4          |
@@ -61,11 +61,23 @@ just qwen-probe  # Qwen/Qwen3-0.6B train/save-load probe
 
 Params = trainable adapter params. Peak GPU = peak CUDA memory during train+eval (logged from this run onward; older runs predate the column).
 
-Setup: Qwen3-0.6B-Base, MetaMathQA train (5k steps, batch 4 = 20k samples unless noted), r=32, all q/v targets, GSM8K test (1319 examples). HRA used batch 2 (10k samples) due to memory. AntiPaSTO used r=256 (default for this variant).
+Setup: Qwen3-0.6B-Base, MetaMathQA train (5k steps, batch 4 = 20k samples unless noted), r=32, all q/v targets, GSM8K test (1319 examples). HRA used batch 2 (10k samples) due to memory. The AntiPaSTO family used r=256 (default for these variants).
 
 Reference: PEFT reports LoRA at 49.0% on Llama-3.2-3B (different model, different sample count). Our numbers are not directly comparable but suggest the adapters work.
 
-AntiPaSTO at 59.5% with 4.5K trainable params (1000x fewer than LoRA's 4.59M). It trains singular-value deltas + block-Cayley rotation within the SVD subspace, so it can rescale and reorient existing directions but not create new ones. Higher rank (r>32) or data-driven dimension selection (from antipasto3) may close the gap further.
+### AntiPaSTO family
+
+AntiPaSTO learns a per-direction gain on the frozen top-r SVD basis (`S_eff = S * (1 + ELU(coeff*g))`), so it rescales existing singular directions rather than creating new ones, hence ~320x fewer trainable params than LoRA at ~97% of its accuracy. All variants share the diagonal gain; they differ only in the basis they steer in or the extra structure on the top directions. All have `base_grad_leaks=0` (the frozen residual weight gets no gradient).
+
+| Variant            | GSM8K % | Params | Basis / extra structure                                              |
+| ------------------ | ------- | ------ | ------------------------------------------------------------------- |
+| antipasto_corda    | 61.9%   | 14.3K  | covariance-oriented input projector `P = Vh·C^{-1/2}` (best of family) |
+| antipasto          | 61.4%   | 14.3K  | plain weight-SVD basis, diagonal gain only                          |
+| antipasto_rot      | 61.4%   | 35.8K  | + block-Cayley rotation of the basis (the version this replaces)    |
+| antipasto_ablate   | 61.0%   | 14.4K  | contractive output ablation `(I - α ĉĉᵀ)diag(S)`, can't amplify     |
+| antipasto_arrow    | 60.5%   | 17.5K  | dense b×b mixing block on the top-b directions + diagonal tail      |
+
+The rotation buys nothing here: `antipasto_rot` matches plain `antipasto` to 3 s.f. (61.4%) at 2.5x the params and +20% wall-time, while paying a per-forward Cayley solve. Dropping it (the current default) is free. CorDA's data-oriented basis is the only structure that helps on this capability task; the ablation/arrow cores are aimed at steering and suppression, where the diagonal-only basis can't reach off-axis behavior, so they don't pay off for raw GSM8K accuracy.
 
 
 ## Developer docs
