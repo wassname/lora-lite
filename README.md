@@ -64,7 +64,7 @@ just qwen-probe  # Qwen/Qwen3-0.6B train/save-load probe
 
 Params = trainable adapter params. Peak GPU = peak CUDA memory during train+eval (logged from this run onward; older runs predate the column).
 
-Setup follows [PEFT's method comparison](https://github.com/huggingface/peft/tree/main/method_comparison/MetaMathQA): train on a MetaMathQA subset, test on GSM8K. We swap their Llama-3.2-3B (where LoRA gets ~48%) for the smaller Qwen3-0.6B-Base, so these track method rank, not cross-setup absolutes. Hyperparameters are in [the benchmark script](scripts/metamath_gsm8k_benchmark.py) (r=32 q/v; the AntiPaSTO family uses r=256).
+This is a validation harness, not a leaderboard: every adapter trains on a MetaMathQA subset and is tested on GSM8K, the same protocol as [PEFT's method comparison](https://github.com/huggingface/peft/tree/main/method_comparison/MetaMathQA). A correct implementation clears ~48% (PEFT's LoRA mark on the larger Llama-3.2-3B); every row here does, which is the signal that each adapter trains. See [the benchmark script](scripts/metamath_gsm8k_benchmark.py) for hyperparameters (r=32 q/v; the AntiPaSTO family uses r=256).
 
 AntiPaSTO is the novel row here: instead of adding trainable directions like LoRA, it freezes W's own top-r SVD and learns only a bounded per-direction gain `S_eff = S * (1 + ELU(g))`. The singular basis stays fixed and interpretable, and the adapter is O(r) params (~320x smaller than LoRA). The variants change only the basis or core: CorDA orients it by input covariance ([Yang+ 2024](https://arxiv.org/abs/2406.05223)), ablate learns a contractive directional ablation ([Arditi+ 2024](https://arxiv.org/abs/2406.11717)), arrow adds a small dense block for cross-direction mixing.
 
