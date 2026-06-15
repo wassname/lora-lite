@@ -1,32 +1,22 @@
-"""AntiPaSTO-DPLR: diagonal-plus-low-rank core in the frozen SVD basis.
+"""AntiPaSTO-DPLR: diagonal gain plus a low-rank mixing core in the frozen SVD basis.
 
-antipasto's core is diagonal (a per-direction gain); it rescales each singular
-direction but cannot mix one into another. The arrowhead tried a dense b x b block
-on the top-b directions, but a dense block is the wrong shape (b^2 params, mixes only
-the top-b) and -- sitting on the S-scaled coords -- its perturbation is amplified by
-the largest singular values, so it destabilizes. The fix is LoRA's lesson: a low-rank
-core. Put a trainable rank-k core inside the frozen U/Vh basis, ADDED to the gain:
+antipasto's diagonal gain rescales each singular direction but cannot mix one into
+another. DPLR adds a trainable rank-k core that does, inside the frozen U/Vh basis:
 
     W = U diag(S) Vh + W_res                          # frozen top-r SVD
     learn: g (r,)                                      # diagonal gain
-           A (k,r), B (r,k)                            # low-rank mixing core, B=0 at init
+           A (k,r) kaiming, B (r,k) zero               # low-rank mixing core
+    p = x @ Vh.T                                       # (r,) input in the frozen S-basis
     S_eff = S * (1 + ELU(coeff * g))
-    y = x @ W_res.T + ( (Vh x) * S_eff  +  coeff * B (A (Vh x)) ) @ U.T
+    h = p * S_eff + coeff * (p @ A.T) @ B.T            # diagonal gain + rank-k mixing
+    y = x @ W_res.T + h @ U.T
 
-so the trainable core is  C = diag(S_eff) + coeff * B A  acting in S-space, and
-DeltaW = U C Vh. The diagonal part scales directions; the low-rank part B A mixes them
-across the whole top-r subspace for 2*r*k params (k=LoRA's rank), not b^2.
+The rank-k term is LoRA's core (Hu+ 2021, arXiv:2106.09685) restricted to W's top-r
+subspace, ADDED to the gain rather than folded into diag(S): being independent of S, a
+unit step moves W by O(1) not O(S), so it has no singular-value amplification. Params
+= r + 2*r*k. Identity at init (B=0, g=0) and at coeff=0. Basis (U, Vh) stays frozen.
 
-Why the low-rank part is ADDED, not multiplied into diag(S): an additive core
-U (BA) Vh is independent of S, so a unit step in BA moves W by O(1), not O(S). That is
-exactly the S-amplification edge that made the dense arrowhead block blow up at the
-gain's learning rate -- gone by construction.
-
-Identity at init: B=0 -> BA=0, g=0 -> 1+ELU(0)=1, so C=diag(S) and DeltaW = U diag(S) Vh.
-coeff=0 -> identity too (runtime off). The basis (U, Vh) stays frozen and interpretable;
-only the gain and the rank-k core move.
-
-Refs: antipasto.py (diagonal sibling), lora.py (the low-rank core), antipasto_corda.py
+Refs: antipasto.py (diagonal sibling), lora.py (low-rank core), antipasto_corda.py
 (oriented basis -- composes with this core).
 """
 from dataclasses import dataclass
@@ -51,7 +41,7 @@ class AntiPaSTODPLRConfig(AdapterConfig):
     variant: str = "antipasto_dplr"
     r: int = 256
     # Rank of the low-rank mixing core (LoRA's r, but inside the frozen subspace).
-    # Params = r (gain) + 2*r*lora_rank. k=0 degenerates to plain antipasto.
+    # Params = r (gain) + 2*r*lora_rank. Requires 1 <= lora_rank <= r.
     lora_rank: int = 8
     suppress_only: bool = False  # clamp the gain g<=0 (attenuate only); core unaffected.
     coeff: float = 1.0           # runtime knob: 0=identity, scales gain and core.

@@ -17,6 +17,8 @@ the gain is learned. See forward() for why 1+ELU over linear/exp/tanh.
 Refs:
   - paper: https://github.com/wassname/AntiPaSTO
   - sibling (whitened, mean-diff): steering-lite/.../sspace.py
+  - selection: Wanda (Sun+ 2023, arXiv:2306.11695), ASVD (Yuan+ 2023, arXiv:2312.05821)
+  - top-r SVD init: PiSSA (Meng+ 2024, arXiv:2404.02948)
 """
 from dataclasses import dataclass
 from typing import Iterable, Literal
@@ -149,7 +151,7 @@ class AntiPaSTO:
             W_orig = W_res + (U_old * S_old.unsqueeze(0)) @ Vh_old
 
             U_full, S_full, Vh_full = torch.linalg.svd(W_orig, full_matrices=False)
-            proj = X.to(Vh_full) @ Vh_full.T              # (N, k) input in S-coords (X captured on CPU)
+            proj = X.to(Vh_full) @ Vh_full.T              # (N, r) input in S-coords (X CPU -> GPU here)
             if pool == "rms":
                 act_mag = proj.pow(2).mean(dim=0).sqrt()  # outlier-sensitive
             else:

@@ -7,15 +7,15 @@ directions move the output most on real activations.
 
     C = E[x x^T] (+ eps I)             # input second moment on calibration data
     C^{1/2}, C^{-1/2} via eigh(C)
-    U S Vht = SVD(W C^{1/2})
+    U S Vht = SVD(W C^{1/2})           # top-r is Eckart-Young best under x ~ N(0,C)
     P = Vht C^{-1/2}                   # (r, d_in) oblique input projector
-    W = U diag(S) P    (exactly)
+    W = W_res + U_r diag(S_r) P_r      # exact (residual carries the dropped tail)
     S_eff = S * (1 + ELU(coeff*g))     # same bounded gain as antipasto
     y = x @ W_res.T + ((x @ P.T) * S_eff) @ U.T
 
 Identity at g=0 or coeff=0: S_eff=S. P is oblique (rows not orthonormal -- C^{-1/2}
-skews them); fine for gain reweighting and for output-side ablation (the obliqueness
-is input-side; U stays orthonormal). No calibration_data -> plain SVD (== antipasto).
+skews them); fine for gain reweighting since U stays orthonormal. Requires
+calibration_data (group_init raises otherwise).
 
 Refs: antipasto.py (gain + selection sibling), CorDA arXiv:2406.05223.
 """
@@ -92,29 +92,16 @@ class AntiPaSTOCorDA:
     def group_init(model: nn.Module, targets, cfg, calibration_data: CalibrationData | None) -> None:
         """Re-orient each target's SVD by its input covariance C = E[x x^T].
 
-        Covariance orientation IS this variant's identity, so calibration_data is
-        mandatory -- fail loud rather than silently degrade to plain SVD (which is
-        just antipasto and was the bug that made every corda run a no-op).
-
-        Called by attach() BEFORE any training, so the trainable g is still at its
-        zero init when the basis changes -- re-orienting zero gains is a no-op, no
-        re-indexing needed. Do not call group_init after training has updated g."""
+        Requires calibration_data (raises otherwise). Call only at attach-time,
+        before training updates g (re-orienting g=0 is a no-op, no re-indexing)."""
         if calibration_data is None:
-            raise ValueError(
-                "AntiPaSTOCorDA requires calibration_data (covariance orientation is "
-                "its whole point); got None. Pass attach(model, cfg, calibration_data=...)."
-            )
+            raise ValueError("AntiPaSTOCorDA requires calibration_data; got None.")
 
         layers = {name: layer for name, layer, _ in targets}
-        # accumulate C = sum x x^T on CPU. Peak GPU cost would otherwise be
-        # sum_targets d_in^2 fp32 held at once; for down_proj (d_in=intermediate,
-        # e.g. 14336) that is ~0.8 GB *per layer* and OOMs. CPU accumulation bounds
-        # GPU use to the live activation; the eigh/SVD below run on CPU (one-time).
-        # Diagonal C is NOT a usable shortcut: it misses cross-channel correlation,
-        # which is where the orientation gain lives (measured ~= plain SVD).
-        # If down_proj's d_in^2 is too big even on CPU/RAM, exclude it from CorDA
-        # (leave it on plain antipasto) or use a low-rank C (top-k eig of subsampled
-        # inputs) -- not implemented here.
+        # Accumulate C = sum x x^T on CPU: d_in^2 fp32 per target would OOM the GPU
+        # (down_proj d_in~14336 -> ~0.8 GB/layer). Diagonal C is not a shortcut --
+        # the orientation lives in the cross-channel terms (Yuan+ 2023, ASVD,
+        # arXiv:2312.05821 is the diagonal case).
         cov: dict[str, T] = {}
         cnt: dict[str, int] = {n: 0 for n in layers}
 

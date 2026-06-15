@@ -62,16 +62,20 @@ def attach(model: nn.Module, cfg: AdapterConfig, calibration_data=None, *, _skip
         attached_names.append(name)
         attached_targets.append((name, layer, role))
 
-    group_init = getattr(variant, "group_init", None)
-    ran_data_init = group_init is not None and not _skip_group_init and calibration_data is not None
-    if group_init is not None and not _skip_group_init:
-        group_init(model, attached_targets, cfg, calibration_data)
-
+    # Register the adapter hooks BEFORE group_init. init() crops each weight to W_res,
+    # so without the hooks the calibration forward inside group_init would run through a
+    # model missing every target's top-r. At g=0 (and B=0) the hooks reconstruct the
+    # cropped component exactly, so calibration sees the true full W.
     for _, layer, _ in attached_targets:
         if hasattr(layer._lora_variant, "forward_input"):
             handles.append(layer.register_forward_pre_hook(_pre_hook))
         else:
             handles.append(layer.register_forward_hook(_hook))
+
+    group_init = getattr(variant, "group_init", None)
+    ran_data_init = group_init is not None and not _skip_group_init and calibration_data is not None
+    if group_init is not None and not _skip_group_init:
+        group_init(model, attached_targets, cfg, calibration_data)
 
     # A data-driven group_init (CorDA orient, Wanda re-select) rewrites the frozen
     # base residual W_res into a form init() cannot reproduce at load time (it only
@@ -94,6 +98,14 @@ def detach(model: nn.Module) -> None:
         if not hasattr(layer, "_lora_variant"):
             continue
         variant = layer._lora_variant
+        # Undo the PiSSA-style crop: init() set weight = W - U_r S_r (Vh|P)_r, so add the
+        # frozen top-r back to recover the original W (the trained gain/core are dropped).
+        # Keyed on the shared SVD-gain buffer convention (antipasto family); variants
+        # without lora_U leave weight untouched (e.g. LoRA never cropped it).
+        if hasattr(layer, "lora_U"):
+            proj = layer.lora_P if hasattr(layer, "lora_P") else layer.lora_Vh
+            with torch.no_grad():
+                layer.weight.data += ((layer.lora_U * layer.lora_S) @ proj).to(layer.weight.dtype)
         for pname in variant.param_specs(layer.in_features, layer.out_features, layer._lora_cfg):
             if pname in layer._parameters:
                 del layer._parameters[pname]
@@ -112,9 +124,11 @@ def save(model: nn.Module, path: str) -> None:
     full_sd = model.state_dict()
     sd = {k: v.detach().cpu() for k, v in full_sd.items() if "lora_" in k}
     # data-driven variants also persist their rewritten base residuals (see attach()).
-    for wk in state.get("base_weight_keys", []):
+    base_weight_keys = state.get("base_weight_keys", [])
+    for wk in base_weight_keys:
         sd[wk] = full_sd[wk].detach().cpu()
-    metadata = {"cfg": json.dumps(state["cfg"].to_dict())}
+    metadata = {"cfg": json.dumps(state["cfg"].to_dict()),
+                "base_weight_keys": json.dumps(base_weight_keys)}
     from safetensors.torch import save_file
     save_file(sd, path, metadata=metadata)
 
@@ -125,6 +139,12 @@ def load(model: nn.Module, path: str) -> list[RemovableHandle]:
         metadata = f.metadata()
     sd = load_file(path, device="cpu")
     cfg = AdapterConfig.from_dict(json.loads(metadata["cfg"]))
+    # Base residuals a data-driven group_init rewrote: must be in the checkpoint and
+    # are restored by load_state_dict below (init()'s plain crop would be wrong).
+    base_weight_keys = json.loads(metadata.get("base_weight_keys", "[]"))
+    missing_base = [wk for wk in base_weight_keys if wk not in sd]
+    if missing_base:
+        raise RuntimeError(f"checkpoint declares but omits base residuals: {missing_base}")
     handles = attach(model, cfg, _skip_group_init=True)  # creates empty params; data-driven inits restored from state_dict
     missing, unexpected = model.load_state_dict(sd, strict=False)
     expected_lora = {k for k in model.state_dict() if "lora_" in k}
@@ -134,4 +154,6 @@ def load(model: nn.Module, path: str) -> list[RemovableHandle]:
     unexpected_lora = [k for k in unexpected if "lora_" in k]
     if unexpected_lora:
         raise RuntimeError(f"unexpected lora keys in checkpoint: {unexpected_lora}")
+    # Carry the residual keys onto the attach state so a later save() re-persists them.
+    getattr(model, _ATTACHED_ATTR)["base_weight_keys"] = base_weight_keys
     return handles
