@@ -54,6 +54,9 @@ just qwen-probe  # Qwen/Qwen3-0.6B train/save-load probe
 | [DoRA](https://arxiv.org/abs/2402.09353)      | no        | 62.4%   | 4.67M      | 11.3          |
 | [DeLoRA](https://arxiv.org/abs/2503.18225)    | yes       | 61.5%   | 4.59M      | 11.3          |
 | [AntiPaSTO](https://arxiv.org/abs/2601.07473) | no        | 61.4%   | 14.3K      | 11.3          |
+| AntiPaSTO-CorDA                               | no        | 61.9%   | 14.3K      | 11.3          |
+| AntiPaSTO-ablate                              | no        | 61.0%   | 14.4K      | 11.3          |
+| AntiPaSTO-arrow                               | no        | 60.5%   | 17.5K      | 11.3          |
 | [IA3-FF](https://arxiv.org/pdf/2205.05638)    | yes       | 61.4%   | 86K        | 11.4          |
 | [EVA](https://arxiv.org/abs/2410.07170)       | no        | 60.3%   | 4.59M      | 11.3          |
 | [IA3](https://arxiv.org/pdf/2205.05638)       | yes       | 60.0%   | 57K        | 11.4          |
@@ -61,11 +64,9 @@ just qwen-probe  # Qwen/Qwen3-0.6B train/save-load probe
 
 Params = trainable adapter params. Peak GPU = peak CUDA memory during train+eval (logged from this run onward; older runs predate the column).
 
-Setup: Qwen3-0.6B-Base, MetaMathQA train (5k steps, batch 4 = 20k samples unless noted), r=32, all q/v targets, GSM8K test (1319 examples). HRA used batch 2 (10k samples) due to memory. The AntiPaSTO family used r=256 (default for these variants).
+Setup follows [PEFT's method comparison](https://github.com/huggingface/peft/tree/main/method_comparison/MetaMathQA): train on a MetaMathQA subset, test on GSM8K. We swap their Llama-3.2-3B (where LoRA gets ~48%) for the smaller Qwen3-0.6B-Base, so these track method rank, not cross-setup absolutes. Hyperparameters are in [the benchmark script](scripts/metamath_gsm8k_benchmark.py) (r=32 q/v; the AntiPaSTO family uses r=256).
 
-Reference: PEFT reports LoRA at 49.0% on Llama-3.2-3B (different model, different sample count). Our numbers are not directly comparable but suggest the adapters work.
-
-AntiPaSTO freezes the top-r SVD of W and trains only a per-direction gain `S_eff = S * (1 + ELU(g))`, so the singular basis stays interpretable and the adapter is O(r) params (~320x smaller than LoRA). Variants swap the basis or core: `antipasto_corda` orients it by input covariance (CorDA), `antipasto_ablate` learns a contractive directional ablation (Arditi), `antipasto_arrow` adds a cheap dense block for cross-direction mixing. See `src/lora_lite/variants/antipasto*.py`.
+AntiPaSTO is the novel row here: instead of adding trainable directions like LoRA, it freezes W's own top-r SVD and learns only a bounded per-direction gain `S_eff = S * (1 + ELU(g))`. The singular basis stays fixed and interpretable, and the adapter is O(r) params (~320x smaller than LoRA). The variants change only the basis or core: CorDA orients it by input covariance ([Yang+ 2024](https://arxiv.org/abs/2406.05223)), ablate learns a contractive directional ablation ([Arditi+ 2024](https://arxiv.org/abs/2406.11717)), arrow adds a small dense block for cross-direction mixing.
 
 
 ## Developer docs
