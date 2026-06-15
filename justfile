@@ -75,7 +75,7 @@ metamath-queue variant="lora" steps="5000" model="Qwen/Qwen3-0.6B-Base":
 
 # Run a single MetaMathQA->GSM8K benchmark for a given variant.
 # Per-variant lr / target-name defaults are baked in here.
-bench-variant model variant steps="5000" block="8" r_override="":
+bench-variant model variant steps="5000" lora_rank="8" r_override="":
 	#!/usr/bin/env bash
 	set -euo pipefail
 	lr=1e-4
@@ -94,10 +94,6 @@ bench-variant model variant steps="5000" block="8" r_override="":
 		# matches the published AntiPaSTO row. alpha=r (no extra scaling).
 		antipasto*) lr=5e-3; r=256; alpha=256 ;;
 	esac
-	# 5e-3 suits the tiny S-space gain, but arrow's large dense block is LoRA-like
-	# and destabilizes at that lr (block=128 got 45.7% vs block=8's 60.5%). Drop to
-	# LoRA's 1e-4 once the block dominates the param count.
-	if [ "{{variant}}" = "antipasto_arrow" ] && [ "{{block}}" -gt 8 ]; then lr=1e-4; fi
 	# r override (e.g. low-rank corda sweep); alpha tracks r for the antipasto family.
 	if [ -n "{{r_override}}" ]; then r="{{r_override}}"; alpha="{{r_override}}"; fi
 	exec uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py \
@@ -106,7 +102,7 @@ bench-variant model variant steps="5000" block="8" r_override="":
 		--steps {{steps}} \
 		--lr "$lr" \
 		--target-name "$target" \
-		--antipasto-block {{block}} \
+		--antipasto-lora-rank {{lora_rank}} \
 		--layers all --r "$r" --alpha "$alpha"
 
 metamath-queue-all model="Qwen/Qwen3-0.6B-Base" steps="5000" variants="lora pissa delora dora hra ia3 ia3_ff eva antipasto":

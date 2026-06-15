@@ -37,7 +37,7 @@ CFG_BY_VARIANT = {
     "antipasto_rot": ll.AntiPaSTORotConfig,
     "antipasto_ablate": ll.AntiPaSTOAblateConfig,
     "antipasto_corda": ll.AntiPaSTOCorDAConfig,
-    "antipasto_arrow": ll.AntiPaSTOArrowConfig,
+    "antipasto_dplr": ll.AntiPaSTODPLRConfig,
     "road": ll.RoadConfig,
 }
 
@@ -47,7 +47,7 @@ class BenchmarkConfig:
     """MetaMathQA -> GSM8K benchmark config. Tyro turns this into the CLI."""
 
     model: str = "Qwen/Qwen3-0.6B-Base"
-    variant: Literal["lora", "pissa", "delora", "ia3", "ia3_ff", "dora", "hra", "eva", "antipasto", "antipasto_rot", "antipasto_ablate", "antipasto_corda", "antipasto_arrow", "road"] = "lora"
+    variant: Literal["lora", "pissa", "delora", "ia3", "ia3_ff", "dora", "hra", "eva", "antipasto", "antipasto_rot", "antipasto_ablate", "antipasto_corda", "antipasto_dplr", "road"] = "lora"
     mode: Literal["benchmark", "probe"] = "benchmark"
     device: str = "cuda"
     torch_dtype: str = "bfloat16"
@@ -64,8 +64,8 @@ class BenchmarkConfig:
     antipasto_cov_orient: bool = False
     # AntiPaSTO-rot (legacy rotation variant) basis to rotate.
     antipasto_rotate_basis: Literal["V", "U", "none"] = "V"
-    # AntiPaSTO-arrow: dense interaction block size on the top-b singular directions.
-    antipasto_block: int = 8
+    # AntiPaSTO-dplr: rank of the low-rank mixing core in the frozen subspace.
+    antipasto_lora_rank: int = 8
     target_name: list[str] = field(default_factory=lambda: list(DEFAULT_TARGETS))
     layers: str = "all"
     train_dataset: str = "meta-math/MetaMathQA"
@@ -146,9 +146,9 @@ def cfg_for_variant(args: BenchmarkConfig, dtype: torch.dtype) -> ll.AdapterConf
     if args.variant == "antipasto_ablate":
         extra = {"coeff": args.antipasto_coeff, "k": args.antipasto_ablate_k,
                  "cov_orient": args.antipasto_cov_orient}
-    if args.variant == "antipasto_arrow":
+    if args.variant == "antipasto_dplr":
         extra = {"coeff": args.antipasto_coeff, "suppress_only": args.antipasto_suppress_only,
-                 "block": args.antipasto_block}
+                 "lora_rank": args.antipasto_lora_rank}
     return CFG_BY_VARIANT[args.variant](
         r=args.r,
         alpha=args.r if args.variant == "pissa" else args.alpha,
@@ -533,9 +533,9 @@ def run(args: BenchmarkConfig) -> dict[str, Any]:
     dtype = getattr(torch, args.torch_dtype)
     run_commit = current_git_commit()
     run_id = f"{args.model.replace('/', '--')}__{args.variant}__s{args.steps}__seed{args.seed}"
-    # arrow's capacity is set by block, not r, so keep block-sweep runs from colliding.
-    if args.variant == "antipasto_arrow" and args.antipasto_block != 8:
-        run_id += f"__b{args.antipasto_block}"
+    # dplr capacity is set by lora_rank, not r, so keep rank-sweep runs from colliding.
+    if args.variant == "antipasto_dplr" and args.antipasto_lora_rank != 8:
+        run_id += f"__k{args.antipasto_lora_rank}"
     # antipasto family defaults to r=256; low-rank sweeps get their own dirs.
     if args.variant.startswith("antipasto") and args.r != 256:
         run_id += f"__r{args.r}"

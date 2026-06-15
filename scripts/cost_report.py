@@ -50,7 +50,7 @@ def main() -> None:
     ap.add_argument("--model", default="Qwen/Qwen3-0.6B-Base")
     ap.add_argument("--variants", nargs="+",
                     default=["lora", "antipasto", "antipasto_rot", "antipasto_corda",
-                             "antipasto_ablate", "antipasto_arrow"])
+                             "antipasto_ablate", "antipasto_dplr"])
     ap.add_argument("--target-name", nargs="+", default=[r"q_proj$", r"v_proj$"])
     ap.add_argument("--r", type=int, default=32)
     ap.add_argument("--layers", default="all",
