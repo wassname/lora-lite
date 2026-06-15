@@ -94,6 +94,10 @@ bench-variant model variant steps="5000" block="8":
 		# matches the published AntiPaSTO row. alpha=r (no extra scaling).
 		antipasto*) lr=5e-3; r=256; alpha=256 ;;
 	esac
+	# 5e-3 suits the tiny S-space gain, but arrow's large dense block is LoRA-like
+	# and destabilizes at that lr (block=128 got 45.7% vs block=8's 60.5%). Drop to
+	# LoRA's 1e-4 once the block dominates the param count.
+	if [ "{{variant}}" = "antipasto_arrow" ] && [ "{{block}}" -gt 8 ]; then lr=1e-4; fi
 	exec uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py \
 		--model '{{model}}' \
 		--variant '{{variant}}' \
