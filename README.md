@@ -65,19 +65,7 @@ Setup: Qwen3-0.6B-Base, MetaMathQA train (5k steps, batch 4 = 20k samples unless
 
 Reference: PEFT reports LoRA at 49.0% on Llama-3.2-3B (different model, different sample count). Our numbers are not directly comparable but suggest the adapters work.
 
-### AntiPaSTO family
-
-AntiPaSTO learns a per-direction gain on the frozen top-r SVD basis (`S_eff = S * (1 + ELU(coeff*g))`), so it rescales existing singular directions rather than creating new ones, hence ~320x fewer trainable params than LoRA at ~97% of its accuracy. All variants share the diagonal gain; they differ only in the basis they steer in or the extra structure on the top directions. All have `base_grad_leaks=0` (the frozen residual weight gets no gradient).
-
-| Variant            | GSM8K % | Params | Basis / extra structure                                              |
-| ------------------ | ------- | ------ | ------------------------------------------------------------------- |
-| antipasto_corda    | 61.9%   | 14.3K  | covariance-oriented input projector `P = Vh·C^{-1/2}` (best of family) |
-| antipasto          | 61.4%   | 14.3K  | plain weight-SVD basis, diagonal gain only                          |
-| antipasto_rot      | 61.4%   | 35.8K  | + block-Cayley rotation of the basis (the version this replaces)    |
-| antipasto_ablate   | 61.0%   | 14.4K  | contractive output ablation `(I - α ĉĉᵀ)diag(S)`, can't amplify     |
-| antipasto_arrow    | 60.5%   | 17.5K  | dense b×b mixing block on the top-b directions + diagonal tail      |
-
-The rotation buys nothing here: `antipasto_rot` matches plain `antipasto` to 3 s.f. (61.4%) at 2.5x the params and +20% wall-time, while paying a per-forward Cayley solve. Dropping it (the current default) is free. CorDA's data-oriented basis is the only structure that helps on this capability task; the ablation/arrow cores are aimed at steering and suppression, where the diagonal-only basis can't reach off-axis behavior, so they don't pay off for raw GSM8K accuracy.
+AntiPaSTO freezes the top-r SVD of W and trains only a per-direction gain `S_eff = S * (1 + ELU(g))`, so the singular basis stays interpretable and the adapter is O(r) params (~320x smaller than LoRA). Variants swap the basis or core: `antipasto_corda` orients it by input covariance (CorDA), `antipasto_ablate` learns a contractive directional ablation (Arditi), `antipasto_arrow` adds a cheap dense block for cross-direction mixing. See `src/lora_lite/variants/antipasto*.py`.
 
 
 ## Developer docs
