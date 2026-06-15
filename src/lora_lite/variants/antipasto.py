@@ -1,42 +1,22 @@
-"""AntiPaSTO: SVD steering with learnable, bounded singular-value reweighting.
+"""AntiPaSTO: learnable bounded reweighting of frozen SVD singular values.
 
 wassname 2026  https://arxiv.org/abs/2601.07473
 
-    W = U diag(S) Vh + W_res         (top-r SVD; W_res = W - U_r S_r Vh_r)
-    learn: g (r,)                    per-singular-direction gain log/lin-scale
-    S_eff = S * (1 + ELU(coeff * g))    exp(.) for g<=0, 1+. for g>0
-        suppress_only:  clamp g<=0   -> factor in (0,1], attenuation only
+    W = U diag(S) Vh + W_res           # top-r SVD; W_res = W - U_r S_r Vh_r, frozen
+    learn: g (r,)                      # per-direction gain
+    S_eff = S * (1 + ELU(coeff * g))   # exp(z) for z<0 (bounded), 1+z for z>0
     y = x @ W_res.T + ((x @ Vh.T) * S_eff) @ U.T
 
-Identity at g=0 (or coeff=0): 1+ELU(0)=1 exactly, so S_eff = S and the output is
-x @ W^T up to the one-time SVD-residual rounding. No additive sign-symmetry hack
-needed: the basis is frozen, so the direction sign is fixed and exp/(1+.) is
-sign-preserving. The 1+ELU shape is chosen over linear (sign-flips at g<-1), exp
-(amplification blows up), and tanh (arbitrary bound) -- see forward() for why.
+    suppress_only: clamp g<=0 -> S_eff in (0, S], attenuation only.
+    coeff:         runtime scale; 0 = identity, <0 swaps amplify/suppress.
 
-Changes vs the rotation version this replaces:
-  - Rotation dropped. Rotating Vh/U leaves the interpretable singular basis (the
-    SVD-direction / Conjecture property), which is the entire point of steering in
-    S-space, and the Cayley solve was numerically finicky. The basis is now frozen;
-    the only learned object is the per-direction gain. If you later want
-    cross-direction mixing, add a *fixed-basis* core U M Vh (M trainable, U/Vh frozen)
-    rather than rotating -- that keeps the directions interpretable. It is also far
-    cheaper than PiSSA: a dense r x r core is r^2 params (~= a rank-8 LoRA at r=256),
-    versus PiSSA's free A,B at r*(d_in+d_out), which drifts off the SVD basis.
-  - Additive delta_s -> bounded multiplicative S * (1 + ELU(coeff*g)). Multiplicative
-    is "scaled by S" (uniform *relative* control over an orders-of-magnitude spectrum),
-    stays positive (no S_eff<0 sign-flip -> no incoherence from that path), and the
-    1+ELU shape stops the exp blowup. The 4e-4 sign-symmetry hack is gone.
-  - suppress_only = clamp g<=0 -> factor in (0,1]: attenuation only, structurally
-    cannot blow up. Matches the eval-awareness use case (turn a direction down).
-  - coeff: runtime steering scalar (0 = identity, <0 inverts). The per-call alpha
-    the rotation version lacked.
-  - group_init activation pooling is configurable: 'rms' weights outliers (ASVD
-    intuition), 'mean_abs' is the original outlier-robust pooling.
+Identity at g=0 or coeff=0: 1+ELU(0)=1, so S_eff=S (up to the bf16 SVD round-trip).
+The basis (U, Vh) is frozen, so the singular directions stay interpretable and only
+the gain is learned. See forward() for why 1+ELU over linear/exp/tanh.
 
 Refs:
   - paper: https://github.com/wassname/AntiPaSTO
-  - sibling (whitened, rotation-free, mean-diff): steering-lite/.../sspace.py
+  - sibling (whitened, mean-diff): steering-lite/.../sspace.py
 """
 from dataclasses import dataclass
 from typing import Iterable, Literal
@@ -107,14 +87,15 @@ class AntiPaSTO:
 
     @staticmethod
     def group_init(model: nn.Module, targets, cfg, calibration_data: CalibrationData | None) -> None:
-        """Wanda-style, data-driven dimension selection within the weight SVD.
+        """Data-driven re-selection of which top-r singular directions to keep.
 
-        init() picks the top-r singular dimensions by S alone (PiSSA-style).
-        group_init() re-selects by score[i] = S[i] * pool|X @ Vh[i]|: dimensions
-        that are both large in W AND active on real inputs. pool = 'rms' (outlier-
-        sensitive, the ASVD intuition that activation outliers carry signal) or
-        'mean_abs' (the original, outlier-robust). If calibration_data is None the
-        weight-SVD init from init() is kept.
+            init():       top-r by S alone (PiSSA-style)
+            group_init(): top-r by score[i] = S[i] * pool|X @ Vh[i]|   (Wanda/ASVD)
+            pool = 'rms' (outlier-sensitive) | 'mean_abs' (outlier-robust)
+
+        This re-RANKS W's own singular vectors by activation; it does NOT re-orient
+        the basis (that is CorDA -> antipasto_corda.py). So the kept directions are
+        still plain weight-SVD directions, just a better subset. None -> keep init().
         """
         if calibration_data is None:
             return
@@ -158,7 +139,9 @@ class AntiPaSTO:
                     f"AntiPaSTO at {name}: only {X.shape[0]} calibration tokens, need >= r={r}"
                 )
 
-            # Recover W_orig: init() wrote W_res into layer.weight and stored top-r.
+            # Rebuild the FULL W: init() stored the exact top-r it subtracted, so
+            # W_res + U_r S_r Vh_r == W (full rank, not a cropped matrix). The SVD
+            # below therefore re-selects from W's whole spectrum, not a truncation.
             W_res = layer.weight.data.float()
             U_old = layer.lora_U.float()
             S_old = layer.lora_S.float()
@@ -200,21 +183,13 @@ class AntiPaSTO:
         if cfg.suppress_only:
             g = torch.clamp(g, max=0.0)                       # factor in (0,1]: attenuation only
 
-        # Per-direction reweighting: S_eff = S * (1 + ELU(coeff * g)).
-        #   1 + ELU(z) = exp(z) for z<=0,  1+z for z>0.
-        # Why this and not the obvious ones (all of which we tried):
-        #   linear  S*(1+z)        : constant gradient (stable), but z<-1 -> S_eff<0,
-        #                            a sign flip that drives incoherence. Unstable in
-        #                            the negatives.
-        #   exp     S*exp(z)       : positive, but unbounded and the gradient self-
-        #                            amplifies (d/dz exp = exp), so amplification blows up.
-        #   tanh    S*exp(c*tanh z): bounded, but c is an arbitrary free knob with no
-        #                            principled value, and saturation kills the gradient.
-        #   1+ELU                  : uses each in its safe regime -- exp only where it is
-        #                            bounded in (0,1] (attenuation, cannot go negative),
-        #                            linear where exp would diverge (amplification, const
-        #                            gradient). C1 at z=0 (both -> 1, slope 1); >0 always.
-        # coeff=0 or g=0 -> S_eff = S (identity). coeff<0 swaps amplify/suppress.
+        # S_eff = S * (1 + ELU(z)),  z = coeff*g,  1+ELU(z) = exp(z) for z<=0 else 1+z.
+        # Why 1+ELU and not the obvious alternatives:
+        #   linear S*(1+z)  : z<-1 -> S_eff<0, a sign flip that drives incoherence.
+        #   exp    S*exp(z) : unbounded, gradient self-amplifies (amplification blows up).
+        #   tanh   bounded  : arbitrary bound knob, saturation kills the gradient.
+        # 1+ELU uses each in its safe regime: exp where it is bounded in (0,1]
+        # (attenuation), linear where exp would diverge (amplification). >0 always.
         S_eff = S * (1.0 + torch.nn.functional.elu(coeff * g))
 
         h = (x @ Vh.T) * S_eff                               # input in S-coords, reweighted

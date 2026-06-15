@@ -533,6 +533,9 @@ def run(args: BenchmarkConfig) -> dict[str, Any]:
     dtype = getattr(torch, args.torch_dtype)
     run_commit = current_git_commit()
     run_id = f"{args.model.replace('/', '--')}__{args.variant}__s{args.steps}__seed{args.seed}"
+    # arrow's capacity is set by block, not r, so keep block-sweep runs from colliding.
+    if args.variant == "antipasto_arrow" and args.antipasto_block != 8:
+        run_id += f"__b{args.antipasto_block}"
     out_dir = args.output_dir / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 

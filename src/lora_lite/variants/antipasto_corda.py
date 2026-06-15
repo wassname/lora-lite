@@ -1,42 +1,23 @@
-"""AntiPaSTO-CorDA: steer in a covariance-ORIENTED basis, not the weight-gain basis.
+"""AntiPaSTO-CorDA: reweight in a covariance-oriented basis, not the weight basis.
 
-The complaint that motivates this: plain SVD sorts directions by weight gain ||W v||
-on an *isotropic* input. The behaviour you steer lives where the *data* has energy.
-Those orderings disagree, so the behaviour smears off the top singular axes and a
-top-r crop in the weight basis throws it away. CorDA (Yang+ 2024, arXiv:2406.05223)
-re-orients the decomposition by the input covariance C = E[x x^T], so the top
-directions are the ones with the most energy *on real activations*.
+Plain SVD sorts directions by weight gain ||W v|| on isotropic input. The behaviour
+you steer lives where the DATA has energy, off the top weight-singular axes. CorDA
+(Yang+ 2024, arXiv:2406.05223) re-orients the SVD by the input covariance, so the top-r
+directions move the output most on real activations.
 
-Decomposition (verified: full-rank reconstruction ~1e-5, and on anisotropic data the
-top-r data-truncation error drops ~27x vs plain SVD):
+    C = E[x x^T] (+ eps I)             # input second moment on calibration data
+    C^{1/2}, C^{-1/2} via eigh(C)
+    U S Vht = SVD(W C^{1/2})
+    P = Vht C^{-1/2}                   # (r, d_in) oblique input projector
+    W = U diag(S) P    (exactly)
+    S_eff = S * (1 + ELU(coeff*g))     # same bounded gain as antipasto
+    y = x @ W_res.T + ((x @ P.T) * S_eff) @ U.T
 
-    C = E[x x^T] (+ eps I)              # input second moment on calibration data
-    C^{1/2}, C^{-1/2}  via eigh(C)
-    W~ = W C^{1/2};  SVD(W~) = U S V~h
-    P  = V~h C^{-1/2}                   # (r, d_in) OBLIQUE input projector
-    W  = U diag(S) P    (exactly)       # so y = x W_res^T + ((x P^T) * S_eff) U^T
+Identity at g=0 or coeff=0: S_eff=S. P is oblique (rows not orthonormal -- C^{-1/2}
+skews them); fine for gain reweighting and for output-side ablation (the obliqueness
+is input-side; U stays orthonormal). No calibration_data -> plain SVD (== antipasto).
 
-S here are the singular values of W weighted by input std, so top-r is the optimal
-rank-r in the input-weighted norm E||(W - W_r) x||^2 -- the directions that actually
-move the output on your data.
-
-Connection to the shared/differing-basis problem: C is built from pos AND neg inputs
-pooled, so P spans the *shared* activation structure (the common encoder) that
-chosen-minus-rejected cancels by construction. A trainable gain on this basis can
-therefore reach shared structure that contrastive dS extraction is blind to.
-
-Core: rotation-free. S_eff = S * (1 + ELU(coeff * g)). This is exp(coeff*g) on the
-attenuation side (g<0, bounded, no blow-up) and 1+coeff*g on the amplification side
-(g>0, where exp would diverge). g=0 -> identity. coeff is the runtime knob (0=off).
-
-Basis note: P is OBLIQUE (rows not orthonormal -- C^{-1/2} skews them). That is fine
-for gain reweighting (we scale oblique coordinates), and also fine for OUTPUT-side
-directional ablation: the obliqueness is input-side only, while ablation acts in the
-U/output space where U stays orthonormal. antipasto_ablate has a cov_orient flag that
-reuses this basis -- at low r it captures the behavior output direction that plain-SVD
-top-r drops (measured 1.00 vs 0.65 at r=16).
-
-Falls back to plain SVD (== antipasto, rotation-free) if no calibration_data.
+Refs: antipasto.py (gain + selection sibling), CorDA arXiv:2406.05223.
 """
 from dataclasses import dataclass
 from typing import Iterable

@@ -75,7 +75,7 @@ metamath-queue variant="lora" steps="5000" model="Qwen/Qwen3-0.6B-Base":
 
 # Run a single MetaMathQA->GSM8K benchmark for a given variant.
 # Per-variant lr / target-name defaults are baked in here.
-bench-variant model variant steps="5000":
+bench-variant model variant steps="5000" block="8":
 	#!/usr/bin/env bash
 	set -euo pipefail
 	lr=1e-4
@@ -100,6 +100,7 @@ bench-variant model variant steps="5000":
 		--steps {{steps}} \
 		--lr "$lr" \
 		--target-name "$target" \
+		--antipasto-block {{block}} \
 		--layers all --r "$r" --alpha "$alpha"
 
 metamath-queue-all model="Qwen/Qwen3-0.6B-Base" steps="5000" variants="lora pissa delora dora hra ia3 ia3_ff eva antipasto":

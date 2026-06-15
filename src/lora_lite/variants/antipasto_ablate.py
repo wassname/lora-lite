@@ -1,34 +1,26 @@
 """AntiPaSTO-Ablate: trainable directional ablation in the weight-SVD output basis.
 
-A contractive sibling of antipasto.py. Instead of reweighting the singular gains,
-it projects out a learned direction in the *output* singular basis (the U side):
+A contractive sibling of antipasto.py: instead of reweighting the singular gains it
+projects out a learned direction in the output (U-side) singular basis.
 
     W = U diag(S) Vh + W_res
     learn:  c (r, k) ablation directions,  alpha (k,) strengths in [0, 1]
-    Chat  = orthonormal(c)                          # k unit dirs in S-space
-    h     = (x @ Vh.T) * S                           # output S-coords (= diag(S) Vh x)
-    h    <- h - coeff * (h @ Chat) * alpha @ Chat.T  # project the span out
+    Chat  = orthonormal(c)                            # k unit dirs in S-space
+    h     = (x @ Vh.T) * S                            # output S-coords = diag(S) Vh x
+    h    <- h - coeff * (h @ Chat) * alpha @ Chat.T   # project the span out
     y     = x @ W_res.T + h @ U.T
 
-Why this instead of gain reweighting (antipasto.py):
-  - The core (I - alpha Chat Chat^T) is a CONTRACTION: eigenvalues are 1-alpha along
-    Chat and 1 elsewhere, all in [0, 1] for alpha in [0, 1]. It cannot amplify and
-    cannot blow up, so the failure mode the multiplicative gain fights with bounds is
-    structurally absent. It is also the natural core to recurse (a contraction composed
-    with itself converges; an amplifier diverges).
-  - It is the trainable form of directional ablation (Arditi+ 2024). Ablating Chat in
-    the middle removes output direction U Chat; for a residual *writer*
-    (mlp.down_proj, self_attn.o_proj) that is a residual-stream direction -- the
-    SURGICAL regime in the steering-lite sweeps (directional_ablation topped SI).
-    Target writers, not all Linears, or you get the broad-suppression regime.
+The core (I - alpha Chat Chat^T) is a contraction: eigenvalues 1-alpha along Chat,
+1 elsewhere, all in [0, 1]. It cannot amplify, so it cannot blow up -- the instability
+the multiplicative gain bounds away is structurally absent (and a contraction is the
+natural core to recurse). This is the trainable form of directional ablation (Arditi+
+2024): target residual writers (down_proj, o_proj) for the surgical regime, not all
+Linears.
 
-Runtime: coeff is the per-call knob. coeff=0 -> identity. coeff in (0, 1] -> ablate.
-coeff < 0 -> *add* the direction back (amplify) -- the bidirectional dual; this is the
-side that can grow, so bound coeff there.
+Runtime: coeff is the per-call knob. coeff=0 -> identity; (0, 1] -> ablate; <0 adds the
+direction back (the side that can grow, so bound coeff there).
 
-Init: alpha small (>0 so c receives gradient), c random-normalized. The strong init is
-to warm-start c from the contrastive direction dS in S-space (extract it exactly like
-sspace.py: dS = mean(xS_pos) - mean(xS_neg) on persona-branching pairs), then fine-tune.
+Refs: antipasto.py (gain sibling), directional ablation Arditi+ 2024 arXiv:2406.11717.
 """
 from dataclasses import dataclass
 from typing import Iterable
