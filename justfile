@@ -75,7 +75,7 @@ metamath-queue variant="lora" steps="5000" model="Qwen/Qwen3-0.6B-Base":
 
 # Run a single MetaMathQA->GSM8K benchmark for a given variant.
 # Per-variant lr / target-name defaults are baked in here.
-bench-variant model variant steps="5000" block="8":
+bench-variant model variant steps="5000" block="8" r_override="":
 	#!/usr/bin/env bash
 	set -euo pipefail
 	lr=1e-4
@@ -98,6 +98,8 @@ bench-variant model variant steps="5000" block="8":
 	# and destabilizes at that lr (block=128 got 45.7% vs block=8's 60.5%). Drop to
 	# LoRA's 1e-4 once the block dominates the param count.
 	if [ "{{variant}}" = "antipasto_arrow" ] && [ "{{block}}" -gt 8 ]; then lr=1e-4; fi
+	# r override (e.g. low-rank corda sweep); alpha tracks r for the antipasto family.
+	if [ -n "{{r_override}}" ]; then r="{{r_override}}"; alpha="{{r_override}}"; fi
 	exec uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py \
 		--model '{{model}}' \
 		--variant '{{variant}}' \

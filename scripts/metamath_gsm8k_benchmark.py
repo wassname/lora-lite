@@ -536,6 +536,9 @@ def run(args: BenchmarkConfig) -> dict[str, Any]:
     # arrow's capacity is set by block, not r, so keep block-sweep runs from colliding.
     if args.variant == "antipasto_arrow" and args.antipasto_block != 8:
         run_id += f"__b{args.antipasto_block}"
+    # antipasto family defaults to r=256; low-rank sweeps get their own dirs.
+    if args.variant.startswith("antipasto") and args.r != 256:
+        run_id += f"__r{args.r}"
     out_dir = args.output_dir / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
