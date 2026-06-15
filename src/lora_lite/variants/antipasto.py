@@ -9,6 +9,7 @@ wassname 2026  https://arxiv.org/abs/2601.07473
 
 Identity at t=0: rot_T=0 -> R=I, delta_s~4e-4 -> y ≈ x @ W^T (fp32 SVD round-trip, tiny positive bias on delta_s breaks sign symmetry).
 
+TODO remove rambling
 Scope cut vs antipasto3: this is a fine-tuning adapter, not the full runtime
 steering interface. There is no per-call alpha, so it does not expose the
 bidirectional R(+alpha) / R(-alpha) inference symmetry. The V-basis path uses the
@@ -123,6 +124,7 @@ class AntiPaSTO:
         init() picks the top-r singular dimensions by S alone (PiSSA-style).
         group_init() re-selects based on S[i] * mean|X @ Vh[i]|: dimensions
         that are both large in W AND active given real inputs.
+        FIXME os that corda? or pissa? wanted corda. and or ASVD
 
         If calibration_data is None the weight-SVD init from init() is kept.
         """
@@ -168,6 +170,7 @@ class AntiPaSTO:
                 )
 
             # Recover W_orig: init() wrote W_res into layer.weight and stored top-r components
+            # FIXME isnt this run after, not instead of init. so this is using cropped matrixes
             W_res = layer.weight.data.float()
             U_old = layer.lora_U.float()                  # (d_out, r)
             S_old = layer.lora_S.float()                  # (r,)
