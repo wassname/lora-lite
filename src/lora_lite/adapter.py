@@ -63,6 +63,7 @@ def attach(model: nn.Module, cfg: AdapterConfig, calibration_data=None, *, _skip
         attached_targets.append((name, layer, role))
 
     group_init = getattr(variant, "group_init", None)
+    ran_data_init = group_init is not None and not _skip_group_init and calibration_data is not None
     if group_init is not None and not _skip_group_init:
         group_init(model, attached_targets, cfg, calibration_data)
 
@@ -72,7 +73,13 @@ def attach(model: nn.Module, cfg: AdapterConfig, calibration_data=None, *, _skip
         else:
             handles.append(layer.register_forward_hook(_hook))
 
-    setattr(model, _ATTACHED_ATTR, {"cfg": cfg, "targets": attached_names, "handles": handles})
+    # A data-driven group_init (CorDA orient, Wanda re-select) rewrites the frozen
+    # base residual W_res into a form init() cannot reproduce at load time (it only
+    # knows the plain top-r crop). So those residuals are part of the saved adapter.
+    base_weight_keys = [f"{n}.weight" for n in attached_names] if ran_data_init else []
+    setattr(model, _ATTACHED_ATTR,
+            {"cfg": cfg, "targets": attached_names, "handles": handles,
+             "base_weight_keys": base_weight_keys})
     return handles
 
 
@@ -102,7 +109,11 @@ def save(model: nn.Module, path: str) -> None:
     state = getattr(model, _ATTACHED_ATTR, None)
     if state is None:
         raise RuntimeError("no adapter attached; call attach() first")
-    sd = {k: v.detach().cpu() for k, v in model.state_dict().items() if "lora_" in k}
+    full_sd = model.state_dict()
+    sd = {k: v.detach().cpu() for k, v in full_sd.items() if "lora_" in k}
+    # data-driven variants also persist their rewritten base residuals (see attach()).
+    for wk in state.get("base_weight_keys", []):
+        sd[wk] = full_sd[wk].detach().cpu()
     metadata = {"cfg": json.dumps(state["cfg"].to_dict())}
     from safetensors.torch import save_file
     save_file(sd, path, metadata=metadata)

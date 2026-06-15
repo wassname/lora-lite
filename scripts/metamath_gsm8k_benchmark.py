@@ -443,11 +443,14 @@ def check_probe_reload(
     ll.load(loaded_model, str(adapter_path))
     from safetensors.torch import load_file
     saved_sd = load_file(str(adapter_path), device="cpu")
-    loaded_state = adapter_state(loaded_model)
-    if set(saved_sd) != set(loaded_state):
-        raise AssertionError("loaded adapter keys differ from saved adapter keys")
+    # Every saved tensor (lora_ buffers AND, for data-driven variants, the rewritten
+    # base residuals) must reload bit-identical onto the model.
+    loaded_full = loaded_model.state_dict()
+    missing = set(saved_sd) - set(loaded_full)
+    if missing:
+        raise AssertionError(f"saved adapter keys absent from loaded model: {sorted(missing)[:8]}")
     for name, value in saved_sd.items():
-        if not torch.equal(loaded_state[name].cpu(), value):
+        if not torch.equal(loaded_full[name].cpu(), value):
             raise AssertionError(f"loaded adapter tensor differs: {name}")
     logits_loaded = loaded_model(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"]).logits.detach().clone()
     reload_err = (logits_loaded - logits_trained).abs().max().item()
@@ -539,6 +542,10 @@ def run(args: BenchmarkConfig) -> dict[str, Any]:
     # antipasto family defaults to r=256; low-rank sweeps get their own dirs.
     if args.variant.startswith("antipasto") and args.r != 256:
         run_id += f"__r{args.r}"
+    # antipasto family defaults to lr=5e-3; lr sweeps get their own dirs (the dense/
+    # low-rank cores want a tamer lr than the gain, so this is a real axis).
+    if args.variant.startswith("antipasto") and abs(args.lr - 5e-3) > 1e-9:
+        run_id += f"__lr{args.lr:g}"
     out_dir = args.output_dir / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -546,10 +553,18 @@ def run(args: BenchmarkConfig) -> dict[str, Any]:
     model, tokenizer = load_model_and_tokenizer(args.model, dtype, args.device, args.quantization)
     batches, skipped_train_prompt_too_long = make_train_batches(datasets["train"], tokenizer, args)
     cfg = cfg_for_variant(args, dtype)
-    if args.variant == "eva":
+    # Variants with a data-driven group_init need calibration activations from the
+    # downstream task (IPM mode, per CorDA). eva needs only a few batches for its
+    # init; corda/cov-orient accumulate a d_in x d_in covariance, so follow PEFT's
+    # default of ~256 samples (64 batches x bs=4) for a well-conditioned C.
+    needs_calib = args.variant == "eva" or args.variant == "antipasto_corda" or (
+        args.variant == "antipasto_ablate" and args.antipasto_cov_orient
+    )
+    if needs_calib:
+        n_batches = min(4, len(batches)) if args.variant == "eva" else min(64, len(batches))
         calib = [
             {"input_ids": b["input_ids"], "attention_mask": b["attention_mask"]}
-            for b in batches[: min(4, len(batches))]
+            for b in batches[:n_batches]
         ]
         ll.attach(model, cfg, calibration_data=calib)
     else:

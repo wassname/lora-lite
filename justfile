@@ -75,7 +75,7 @@ metamath-queue variant="lora" steps="5000" model="Qwen/Qwen3-0.6B-Base":
 
 # Run a single MetaMathQA->GSM8K benchmark for a given variant.
 # Per-variant lr / target-name defaults are baked in here.
-bench-variant model variant steps="5000" lora_rank="8" r_override="":
+bench-variant model variant steps="5000" lora_rank="8" r_override="" lr_override="":
 	#!/usr/bin/env bash
 	set -euo pipefail
 	lr=1e-4
@@ -96,6 +96,8 @@ bench-variant model variant steps="5000" lora_rank="8" r_override="":
 	esac
 	# r override (e.g. low-rank corda sweep); alpha tracks r for the antipasto family.
 	if [ -n "{{r_override}}" ]; then r="{{r_override}}"; alpha="{{r_override}}"; fi
+	# lr override (e.g. dplr core wants a tamer lr than the gain's 5e-3).
+	if [ -n "{{lr_override}}" ]; then lr="{{lr_override}}"; fi
 	exec uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py \
 		--model '{{model}}' \
 		--variant '{{variant}}' \

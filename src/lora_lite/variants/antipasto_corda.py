@@ -92,14 +92,18 @@ class AntiPaSTOCorDA:
     def group_init(model: nn.Module, targets, cfg, calibration_data: CalibrationData | None) -> None:
         """Re-orient each target's SVD by its input covariance C = E[x x^T].
 
-        Without calibration_data the plain-SVD init from init() is kept (so this
-        degrades to antipasto, rotation-free).
+        Covariance orientation IS this variant's identity, so calibration_data is
+        mandatory -- fail loud rather than silently degrade to plain SVD (which is
+        just antipasto and was the bug that made every corda run a no-op).
 
         Called by attach() BEFORE any training, so the trainable g is still at its
         zero init when the basis changes -- re-orienting zero gains is a no-op, no
         re-indexing needed. Do not call group_init after training has updated g."""
         if calibration_data is None:
-            return
+            raise ValueError(
+                "AntiPaSTOCorDA requires calibration_data (covariance orientation is "
+                "its whole point); got None. Pass attach(model, cfg, calibration_data=...)."
+            )
 
         layers = {name: layer for name, layer, _ in targets}
         # accumulate C = sum x x^T on CPU. Peak GPU cost would otherwise be
