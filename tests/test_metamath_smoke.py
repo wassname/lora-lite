@@ -21,9 +21,11 @@ import torch
 
 import lora_lite as ll
 
+_SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+sys.path.insert(0, str(_SCRIPTS))   # benchmark does `from _cost import ...` (sibling module)
 SPEC = importlib.util.spec_from_file_location(
     "metamath_benchmark",
-    Path(__file__).resolve().parent.parent / "scripts" / "metamath_gsm8k_benchmark.py",
+    _SCRIPTS / "metamath_gsm8k_benchmark.py",
 )
 benchmark = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = benchmark
@@ -32,7 +34,7 @@ SPEC.loader.exec_module(benchmark)
 
 VARIANTS = ["lora", "pissa", "delora", "ia3", "ia3_ff", "dora", "hra", "eva",
             "antipasto", "antipasto_rot", "antipasto_ablate", "antipasto_corda",
-            "antipasto_dplr", "road"]
+            "antipasto_asvd", "antipasto_dplr", "road"]
 # Variants that fail loud when attached on a bnb-loaded base (read dense weight in init).
 # delora/eva also read weight but currently silently dequant -- they produce sane attach,
 # so we don't expect a raise from them in the attach-only smoke.

@@ -48,8 +48,8 @@ class AntiPaSTORotConfig(AdapterConfig):
     block_size: int = 4
     # Cayley map saturation: bounds rotation angle to ~max_rotation_angle radians.
     max_rotation_angle: float = 0.5
-    # Which singular basis to rotate: 'V' (input), 'U' (output), or 'none'.
-    rotate_basis: Literal["V", "U", "none"] = "V"
+    # Which singular basis to rotate: 'V' (input), 'U' (output), 'both', or 'none'.
+    rotate_basis: Literal["V", "U", "both", "none"] = "V"
 
 
 def _cayley(skew: torch.Tensor) -> torch.Tensor:
@@ -96,6 +96,9 @@ class AntiPaSTORot:
             n_blocks = r // bs
             n_triu = bs * (bs - 1) // 2
             specs["lora_rot_T"] = ParamSpec((n_blocks, n_triu), init="zeros")
+            if cfg.rotate_basis == "both":
+                # 'both' rotates V (lora_rot_T) and U independently; lora_rot_T_u is the U-side.
+                specs["lora_rot_T_u"] = ParamSpec((n_blocks, n_triu), init="zeros")
         return specs
 
     @staticmethod
@@ -210,20 +213,18 @@ class AntiPaSTORot:
         if rotate_basis == "none":
             U_eff, Vh_eff = U, Vh
         else:
-            R_blocks = _build_rotation(layer.lora_rot_T.float(), bs, max_angle).to(x.dtype)
-            n_blocks = R_blocks.shape[0]                      # R_blocks: (n, bs, bs)
-            if rotate_basis == "V":
+            R = _build_rotation(layer.lora_rot_T.float(), bs, max_angle).to(x.dtype)
+            n_blocks = R.shape[0]                             # R: (n, bs, bs)
+            U_eff, Vh_eff = U, Vh
+            # 'V'/'U' rotate that one basis with lora_rot_T; 'both' rotates V with
+            # lora_rot_T and U with a separate lora_rot_T_u (independent rotations).
+            if rotate_basis in ("V", "both"):
                 Vh_blocks = rearrange(Vh, "(n a) i -> n a i", n=n_blocks)
-                Vh_rot = einsum(R_blocks, Vh_blocks, "n a b, n b i -> n a i")
-                Vh_eff = rearrange(Vh_rot, "n a i -> (n a) i")
-                U_eff = U
-            elif rotate_basis == "U":
+                Vh_eff = rearrange(einsum(R, Vh_blocks, "n a b, n b i -> n a i"), "n a i -> (n a) i")
+            if rotate_basis in ("U", "both"):
+                R_u = _build_rotation(layer.lora_rot_T_u.float(), bs, max_angle).to(x.dtype) if rotate_basis == "both" else R
                 U_blocks = rearrange(U, "d (n b) -> d n b", n=n_blocks)
-                U_rot = einsum(U_blocks, R_blocks, "d n b, n c b -> d n c")
-                U_eff = rearrange(U_rot, "d n c -> d (n c)")
-                Vh_eff = Vh
-            else:
-                raise ValueError(f"rotate_basis must be 'U', 'V', or 'none', got {rotate_basis!r}")
+                U_eff = rearrange(einsum(U_blocks, R_u, "d n b, n c b -> d n c"), "d n c -> d (n c)")
 
         S_eff = S + layer.lora_delta_s.to(x.dtype)            # (r,)
         h = x @ Vh_eff.T                                      # x @ Vh_eff.T

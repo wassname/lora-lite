@@ -1,5 +1,13 @@
 set shell := ["bash", "-cu"]
 
+# Base (NOT Instruct) text model: CorDA/PiSSA/ASVD decompose the pretrained weight and
+# orient by calibration covariance -- the task must not be pre-baked by RLHF, or the
+# variant differences ceiling out. AutoModelForCausalLM resolves Qwen3.5-0.8B-Base to
+# the text-only Qwen3_5ForCausalLM (0.75B, no vision tower). It is a hybrid: 18 of 24
+# layers are GatedDeltaNet (no q/v), 6 are full attention. So we target down_proj (dense
+# nn.Linear in ALL 24 layers, d_in=3584) -- also CorDA/ASVD's canonical, highest-d_in target.
+model := "Qwen/Qwen3.5-0.8B-Base"
+
 default:
 	@just --list
 
@@ -25,7 +33,7 @@ qwen-probe variants="lora pissa delora ia3" steps="5":
 	for variant in {{variants}}; do
 		uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py \
 			--mode probe \
-			--model Qwen/Qwen3-0.6B-Base \
+			--model {{model}} \
 			--variant "$variant" \
 			--steps {{steps}} \
 			--batch-size 1 \
@@ -38,7 +46,7 @@ qwen-probe variants="lora pissa delora ia3" steps="5":
 			--alpha 8 \
 			--layers 0 \
 			--lr 5e-3 \
-			--target-name 'model\.layers\.0\.self_attn\.(q_proj|v_proj)$'
+			--target-name 'model\.layers\.0\.mlp\.down_proj$'
 	done
 
 qwen-queue variants="lora pissa delora ia3" steps="16":
@@ -65,7 +73,7 @@ metamath-smoke variant="lora" steps="2" max_train_samples="8" max_eval_samples="
 		--torch-dtype float32 \
 		--device {{device}}
 
-metamath-queue variant="lora" steps="5000" model="Qwen/Qwen3-0.6B-Base":
+metamath-queue variant="lora" steps="5000" model=model:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	pueue add \
@@ -75,11 +83,13 @@ metamath-queue variant="lora" steps="5000" model="Qwen/Qwen3-0.6B-Base":
 
 # Run a single MetaMathQA->GSM8K benchmark for a given variant.
 # Per-variant lr / target-name defaults are baked in here.
-bench-variant model variant steps="5000" lora_rank="8" r_override="" lr_override="":
+bench-variant model variant steps="5000" lora_rank="8" r_override="" lr_override="" rotate_basis="V":
 	#!/usr/bin/env bash
 	set -euo pipefail
 	lr=1e-4
-	target='(q_proj|v_proj)$'
+	# down_proj: dense nn.Linear in all 24 layers of the hybrid Qwen3.5 (q/v exist in
+	# only 6 full-attention layers) and CorDA/ASVD's canonical highest-d_in target.
+	target='(down_proj)$'
 	r=32; alpha=64
 	# IA3 lr: paper uses 3e-3 to 1e-2 (Liu et al. 2022 §3.3). Also a hard
 	# bf16 floor: lora_g inits to 1.0 where bf16 spacing is ~7.8e-3, so
@@ -98,6 +108,11 @@ bench-variant model variant steps="5000" lora_rank="8" r_override="" lr_override
 	if [ -n "{{r_override}}" ]; then r="{{r_override}}"; alpha="{{r_override}}"; fi
 	# lr override (e.g. dplr core wants a tamer lr than the gain's 5e-3).
 	if [ -n "{{lr_override}}" ]; then lr="{{lr_override}}"; fi
+	# 0.8B + large vocab: HF ForCausalLMLoss upcasts logits to fp32 (bs*seq*vocab*4),
+	# which OOMs the 24GB card at the old bs=4/seq=768. micro-batch 2 fits at ~10GB;
+	# grad-accum 4 -> effective batch 8 (optimization quality without the memory).
+	# expandable_segments curbs fragmentation. Same for all variants -> fair comparison.
+	export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 	exec uv run --extra benchmark python scripts/metamath_gsm8k_benchmark.py \
 		--model '{{model}}' \
 		--variant '{{variant}}' \
@@ -105,11 +120,15 @@ bench-variant model variant steps="5000" lora_rank="8" r_override="" lr_override
 		--lr "$lr" \
 		--target-name "$target" \
 		--antipasto-lora-rank {{lora_rank}} \
-		--layers all --r "$r" --alpha "$alpha"
+		--batch-size 2 --grad-accum 4 --max-seq-length 512 --batch-size-eval 16 \
+		--layers all --r "$r" --alpha "$alpha" \
+		--antipasto-rotate-basis '{{rotate_basis}}'
 
-metamath-queue-all model="Qwen/Qwen3-0.6B-Base" steps="5000" variants="lora pissa delora dora hra ia3 ia3_ff eva antipasto":
+metamath-queue-all model=model steps="2500" variants="lora pissa delora dora hra ia3 ia3_ff eva antipasto antipasto_rot antipasto_corda antipasto_asvd antipasto_ablate antipasto_dplr":
 	#!/usr/bin/env bash
 	set -euo pipefail
+	# One pueue job per variant (each runs the live code at run time, so editing
+	# while queued is safe). Re-queue here whenever the base model changes.
 	for variant in {{variants}}; do
 		pueue add \
 			-l "why: benchmark {{model}} ${variant} on MetaMathQA->GSM8K at {{steps}} steps; resolve: outputs/metamath_gsm8k/results/benchmark_results.tsv gets a row with accuracy commit time method argv and result JSON for ${variant}" \

@@ -53,6 +53,100 @@ def _gain(S: T, g: T, coeff: float, suppress_only: bool) -> T:
     return S * (1.0 + F.elu(coeff * g))
 
 
+def _covariance_orient(model, targets, cfg, calibration_data, *, diag: bool) -> None:
+    """Re-orient each target's SVD by its input second moment, then rewrite the frozen
+    buffers (U, S, P) and residual weight in that basis. Shared by CorDA and ASVD:
+
+        diag=False -> CorDA: full C = E[x x^T] (cross-channel covariance, via eigh)
+        diag=True  -> ASVD:  diag(C) = E[x_i^2] only (per-channel scale, O(d_in), no eigh)
+
+    The off-diagonal of C is the sole difference. g=0 stays exact identity either way --
+    the reconstruction (W_res + U_r S_r P_r = W_orig) is lossless. Accumulated on CPU: a
+    full C is d_in^2 fp32 per target and would crowd the GPU; the diagonal is a d_in vector.
+    Call at attach-time, before training touches g (re-orienting g=0 is a no-op).
+    """
+    if calibration_data is None:
+        raise ValueError("covariance orientation requires calibration_data; got None.")
+
+    layers = {name: layer for name, layer, _ in targets}
+    moment: dict[str, T] = {}                          # (d_in,d_in) full, or (d_in,) diagonal
+    cnt: dict[str, int] = {n: 0 for n in layers}
+    keep: dict[str, T] = {}                            # non-pad mask of the in-flight batch
+
+    def make_hook(name):
+        def _h(module, args, kwargs):
+            x = rearrange(args[0].detach(), "... d -> (...) d").to(torch.float32).cpu()
+            if "mask" in keep:
+                x = x[keep["mask"]]                     # drop padding positions (see loop below)
+            m = x.pow(2).sum(0) if diag else x.T @ x
+            moment[name] = m if name not in moment else moment[name] + m
+            cnt[name] += x.shape[0]                     # real (non-pad) tokens accumulated
+        return _h
+
+    handles = [layers[n].register_forward_pre_hook(make_hook(n), with_kwargs=True) for n in layers]
+    try:
+        was_training = model.training
+        model.eval()
+        with torch.no_grad():
+            for batch in calibration_data:
+                # Padding activations are not task-representative; mask them out of the moment
+                # so the oriented basis reflects real tokens (CorDA/SVD-LLM official code does
+                # the same). The mask is per-token, shared across all target layers in a batch.
+                keep.pop("mask", None)
+                if isinstance(batch, dict):
+                    if "attention_mask" in batch:
+                        keep["mask"] = rearrange(batch["attention_mask"], "... -> (...)").bool().cpu()
+                    model(**batch)
+                elif isinstance(batch, (list, tuple)):
+                    model(*batch)
+                else:
+                    model(batch)
+        if was_training:
+            model.train()
+    finally:
+        for h in handles:
+            h.remove()
+
+    r, eps = cfg.r, float(cfg.cov_eps)
+    for name, layer in layers.items():
+        if cnt[name] < r:
+            raise RuntimeError(f"covariance orient at {name}: {cnt[name]} tokens, need >= r={r}")
+        # decomposition on CPU (where the moment lives); results copied back to device buffers.
+        W_res = layer.weight.data.float().cpu()
+        U_old, S_old, P_old = (layer.lora_U.float().cpu(),
+                               layer.lora_S.float().cpu(),
+                               layer.lora_P.float().cpu())
+        W_orig = W_res + (U_old * S_old) @ P_old
+
+        if diag:
+            c = (moment[name] / cnt[name]).clamp_min(0) + eps   # (d_in,) per-channel scale
+            Ut, St, Vht = torch.linalg.svd(W_orig * c.sqrt(), full_matrices=False)  # @ diag(c^1/2)
+            Pr = Vht[:r] * c.rsqrt()                            # @ diag(c^-1/2): oblique projector
+        else:
+            C = moment[name] / cnt[name]                        # (d_in,d_in)
+            lam, Q = torch.linalg.eigh(C)
+            lam = lam.clamp_min(0) + eps
+            Mhalf    = (Q * lam.sqrt())  @ Q.T                   # C^{1/2}
+            Minvhalf = (Q * lam.rsqrt()) @ Q.T                   # C^{-1/2}
+            Ut, St, Vht = torch.linalg.svd(W_orig @ Mhalf, full_matrices=False)
+            Pr = Vht[:r] @ Minvhalf                             # (r, d_in) oblique projector
+        # Quantize the frozen buffers to their stored dtype FIRST, then form the residual
+        # against those exact (bf16) values. The forward reconstructs from the bf16 buffers,
+        # so W_res + U_r S_r P_r = W_orig to one residual-rounding -- without this, the
+        # residual is built from fp32 U/S/P and the forward also eats the U/S/P quantization
+        # mismatch, so g=0 drifts further from identity.
+        Ur = Ut[:, :r].to(layer.lora_U.dtype)
+        Sr = St[:r].to(layer.lora_S.dtype)
+        Pr = Pr.to(layer.lora_P.dtype)
+        W_res_new = W_orig - (Ur.float() * Sr.float()) @ Pr.float()
+
+        with torch.no_grad():
+            layer.lora_U.copy_(Ur)
+            layer.lora_S.copy_(Sr)
+            layer.lora_P.copy_(Pr)
+            layer.weight.data.copy_(W_res_new.to(layer.weight))
+
+
 @register
 class AntiPaSTOCorDA:
     name = "antipasto_corda"
@@ -90,75 +184,8 @@ class AntiPaSTOCorDA:
 
     @staticmethod
     def group_init(model: nn.Module, targets, cfg, calibration_data: CalibrationData | None) -> None:
-        """Re-orient each target's SVD by its input covariance C = E[x x^T].
-
-        Requires calibration_data (raises otherwise). Call only at attach-time,
-        before training updates g (re-orienting g=0 is a no-op, no re-indexing)."""
-        if calibration_data is None:
-            raise ValueError("AntiPaSTOCorDA requires calibration_data; got None.")
-
-        layers = {name: layer for name, layer, _ in targets}
-        # Accumulate C = sum x x^T on CPU: d_in^2 fp32 per target would OOM the GPU
-        # (down_proj d_in~14336 -> ~0.8 GB/layer). Diagonal C is not a shortcut --
-        # the orientation lives in the cross-channel terms (Yuan+ 2023, ASVD,
-        # arXiv:2312.05821 is the diagonal case).
-        cov: dict[str, T] = {}
-        cnt: dict[str, int] = {n: 0 for n in layers}
-
-        def make_hook(name):
-            def _h(module, args, kwargs):
-                x = rearrange(args[0].detach(), "... d -> (...) d").to(torch.float32).cpu()
-                g = x.T @ x                                  # (d_in, d_in) on CPU
-                cov[name] = g if name not in cov else cov[name] + g
-                cnt[name] += x.shape[0]
-            return _h
-
-        handles = [layers[n].register_forward_pre_hook(make_hook(n), with_kwargs=True) for n in layers]
-        try:
-            was_training = model.training
-            model.eval()
-            with torch.no_grad():
-                for batch in calibration_data:
-                    if isinstance(batch, dict):
-                        model(**batch)
-                    elif isinstance(batch, (list, tuple)):
-                        model(*batch)
-                    else:
-                        model(batch)
-            if was_training:
-                model.train()
-        finally:
-            for h in handles:
-                h.remove()
-
-        r, eps = cfg.r, float(cfg.cov_eps)
-        for name, layer in layers.items():
-            if cnt[name] < r:
-                raise RuntimeError(f"AntiPaSTOCorDA at {name}: {cnt[name]} tokens, need >= r={r}")
-            # decomposition on CPU (where C lives); copy results back to device buffers.
-            W_res = layer.weight.data.float().cpu()
-            U_old, S_old, P_old = (layer.lora_U.float().cpu(),
-                                   layer.lora_S.float().cpu(),
-                                   layer.lora_P.float().cpu())
-            W_orig = W_res + (U_old * S_old) @ P_old
-
-            C = cov[name] / cnt[name]                        # (d_in, d_in) CPU
-            lam, Q = torch.linalg.eigh(C)
-            lam = lam.clamp_min(0) + eps
-            Chalf    = (Q * lam.sqrt())  @ Q.T               # C^{1/2}
-            Cinvhalf = (Q * lam.rsqrt()) @ Q.T               # C^{-1/2}
-
-            Ut, St, Vht = torch.linalg.svd(W_orig @ Chalf, full_matrices=False)
-            Ur = Ut[:, :r]                                   # (d_out, r)
-            Sr = St[:r]                                      # (r,)
-            Pr = (Vht[:r] @ Cinvhalf)                        # (r, d_in) oblique projector
-            W_res_new = (W_orig - (Ur * Sr) @ Pr)
-
-            with torch.no_grad():
-                layer.lora_U.copy_(Ur.to(layer.lora_U))
-                layer.lora_S.copy_(Sr.to(layer.lora_S))
-                layer.lora_P.copy_(Pr.to(layer.lora_P))
-                layer.weight.data.copy_(W_res_new.to(layer.weight))
+        """CorDA: re-orient by the full input covariance C = E[x x^T] (cross-channel)."""
+        _covariance_orient(model, targets, cfg, calibration_data, diag=False)
 
     @staticmethod
     def forward(

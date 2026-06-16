@@ -1,0 +1,19 @@
+**Evaluating reconstruction error**
+
+I'm exploring how eps impacts reconstruction error. It seems eps doesn't introduce additional errors due to finite precision but just alters the decomposition. I think for full SVD, as long as Mhalf and Minvhalf are true inverses, it works. However, for truncated SVD, that's not the case. The residual comes out exact. I should also consider discussing clamp_min(0) in combination with eps. It looks like there’s a bit more to analyze here!**Evaluating identity output**
+
+I’m considering whether the user needs the original W x output to be exactly the same in arithmetic versus in code using bf16. In terms of exact arithmetic, yes, but it seems like bf16 won't match precisely. If exact precision is necessary, this might be something that should be fixed. I wonder if I could propose computing the residual after quantizing U/S/P as a solution to address this issue.**Clarifying code concepts**
+
+In the code context, if `r` is less than the rank, then `(Ur*Sr)@Pr` represents the weighted rank-r. Essentially, `W_res_new` is calculated as `W_orig` minus this value. When discussing equality, it's important to note that in precise arithmetic, it becomes trivial. However, the top-r part should be treated as an approximate reconstruction when it stands alone. I need to keep these distinctions clear for better understanding!**Evaluating quant methods**
+
+Many quantitative methods use activation scaling with RMS that isn't centered. If the mean is nonzero, the uncentered approach can lead to a heavily biased μ. That's an important detail! I wonder if other methods might give different results if a centered approach were used instead. It's interesting to think about how such small changes can impact the outcomes in quantitative analysis. I'll keep this in mind as I explore more about these methods.**Considering token padding issues**
+
+I'm thinking about how tokenization works and the impact of padding. If activations from masked padding are included, they might skew the calibration results. The user didn’t explicitly ask, but I wonder if representativeness is a concern. I should cite the formula used for counting tokens and note how each position is weighted equally, which might not be ideal if variable lengths include padding. It's important to optimize the data correctly, especially in transformers!**Drafting final verdict**
+
+I’m preparing the final verdict, concluding that claims 1, 3, and 5 are correct. For claim 2, it holds with the SPD second moment used in a damped objective due to epsilon. Claim 4 reveals that no identity error arises with the residual; the truncated term doesn’t telescope.
+
+Now, I want to lay out the details clearly but concisely. I’ll include mathematical notation, detailing the relationship between column input and row returns, and then provide proof for claim 2 using the necessary equations.**Clarifying mathematical notation**
+
+I'm thinking about how to handle the matrix M, where it’s not just C but rather C plus eps times the identity matrix (I). I need to clarify this in the context of ASVD, focusing on the entries. It’s important to accurately express how the addition of eps affects the matrix and its properties. I’ll ensure to incorporate this into the overall explanation properly.**Finalizing structure**
+
+I’m starting with the initialization process, making sure everything is set up correctly. The code is being reconstructed from previous versions, which feels promising. Now, I want to write the final version clearly and in a structured way. I’ll be careful about keeping it concise and will use code snippets for citations, focusing on exact lines instead of line numbers. This way, the user can easily follow along. Let’s wrap this up!

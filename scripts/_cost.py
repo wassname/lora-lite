@@ -71,6 +71,13 @@ def measure_cost(
     named = list(model.named_parameters()) + list(model.named_buffers())
     adapter_bytes = sum(t.numel() * t.element_size() for n, t in named if adapter_filter in n)
 
+    # Adapter ADDED MACs/token, analytic and arch-independent (the FLOP counter below
+    # asserts on some fused/linear-attention shapes -> None). Each 2D adapter weight of
+    # shape (a, b) is used once in a per-token matmul, contributing a*b MACs; summing 2D
+    # adapter-tensor numel is therefore the exact added compute for the U/Vh/P/A/B paths.
+    # (Slight undercount for cores that reuse a factor twice, e.g. ablate's C C^T.)
+    added_macs_per_token = sum(t.numel() for n, t in named if adapter_filter in n and t.ndim == 2)
+
     # FLOPs: one forward under the counter (no grad so we count inference cost).
     # FlopCounterMode can assert on some fused attention shapes; degrade to None.
     try:
@@ -92,7 +99,8 @@ def measure_cost(
     return dict(
         trainable_params=trainable_params,
         adapter_resident_mb=adapter_bytes / 1e6,
-        flops=flops,
+        added_macs_per_token=added_macs_per_token,   # adapter-only, always populated
+        flops=flops,                                 # whole model, best-effort (None on hybrid attn)
         macs_per_token=(flops / n_tokens) if (flops and n_tokens) else None,
         fwd_ms=fwd_ms,
         bwd_ms=bwd_ms,
