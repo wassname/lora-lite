@@ -2,14 +2,12 @@
 
 Answers "which is best -- time / flops / adds / params?": MACs/token is the
 deterministic apples-to-apples compute number; trainable_params is the size headline;
-wall-time is the felt-but-noisy number; group_init is where CorDA's eigh(d_in^3) bites.
+wall-time is the felt-but-noisy number; group_init is the one-time init cost.
 
 Usage:
   uv run --extra benchmark python scripts/cost_report.py \
-    --model Qwen/Qwen3-0.6B-Base --variants antipasto antipasto_corda antipasto_ablate lora \
+    --model Qwen/Qwen3-0.6B-Base --variants antipasto lora pissa \
     --target-name 'q_proj$' 'v_proj$' --r 32 --out logs/cost_qwen0.6b.log
-
-Point --target-name at down_proj to see the CorDA covariance corner (large d_in).
 """
 from __future__ import annotations
 
@@ -40,7 +38,6 @@ def build_cfg(variant: str, args, dtype) -> ll.AdapterConfig:
     bcfg = benchmark.BenchmarkConfig(
         model=args.model, variant=variant, r=args.r, alpha=float(args.r),
         target_name=list(args.target_name), layers=args.layers, torch_dtype=args.dtype,
-        antipasto_cov_orient=args.cov_orient,
     )
     return benchmark.cfg_for_variant(bcfg, dtype)
 
@@ -49,19 +46,16 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3-0.6B-Base")
     ap.add_argument("--variants", nargs="+",
-                    default=["lora", "antipasto", "antipasto_rot", "antipasto_corda",
-                             "antipasto_ablate", "antipasto_dplr"])
+                    default=["lora", "pissa", "antipasto"])
     ap.add_argument("--target-name", nargs="+", default=[r"q_proj$", r"v_proj$"])
     ap.add_argument("--r", type=int, default=32)
     ap.add_argument("--layers", default="all",
-                    help="'all' or comma list e.g. '0,1' -- limit layers (CorDA down_proj eigh is slow).")
+                    help="'all' or comma list e.g. '0,1' -- limit layers.")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--dtype", default="bfloat16")
     ap.add_argument("--seq-len", type=int, default=256)
     ap.add_argument("--batch", type=int, default=2)
     ap.add_argument("--calib-batches", type=int, default=4)
-    ap.add_argument("--cov-orient", action="store_true",
-                    help="CorDA-orient antipasto_ablate (measure the eigh corner).")
     ap.add_argument("--out", default="logs/cost.log")
     args = ap.parse_args()
 

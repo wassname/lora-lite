@@ -35,11 +35,6 @@ CFG_BY_VARIANT = {
     "hra": ll.HRAConfig,
     "eva": ll.EVAConfig,
     "antipasto": ll.AntiPaSTOConfig,
-    "antipasto_rot": ll.AntiPaSTORotConfig,
-    "antipasto_ablate": ll.AntiPaSTOAblateConfig,
-    "antipasto_corda": ll.AntiPaSTOCorDAConfig,
-    "antipasto_asvd": ll.AntiPaSTOASVDConfig,
-    "antipasto_dplr": ll.AntiPaSTODPLRConfig,
     "road": ll.RoadConfig,
 }
 
@@ -49,7 +44,7 @@ class BenchmarkConfig:
     """MetaMathQA -> GSM8K benchmark config. Tyro turns this into the CLI."""
 
     model: str = "Qwen/Qwen3.5-0.8B-Base"
-    variant: Literal["lora", "pissa", "delora", "ia3", "ia3_ff", "dora", "hra", "eva", "antipasto", "antipasto_rot", "antipasto_ablate", "antipasto_corda", "antipasto_asvd", "antipasto_dplr", "road"] = "lora"
+    variant: Literal["lora", "pissa", "delora", "ia3", "ia3_ff", "dora", "hra", "eva", "antipasto", "road"] = "lora"
     mode: Literal["benchmark", "probe"] = "benchmark"
     device: str = "cuda"
     torch_dtype: str = "bfloat16"
@@ -58,16 +53,8 @@ class BenchmarkConfig:
     alpha: float = 64.0
     delora_lambda0: float = 0.1
     road_group_size: int = 64
-    # AntiPaSTO family (gain / corda) runtime knobs.
-    antipasto_coeff: float = 1.0
-    antipasto_suppress_only: bool = False
-    # AntiPaSTO-ablate.
-    antipasto_ablate_k: int = 1
-    antipasto_cov_orient: bool = False
-    # AntiPaSTO-rot (legacy rotation variant) basis to rotate.
+    # AntiPaSTO singular basis to rotate: V (default) / U / both / none (ablation axes).
     antipasto_rotate_basis: Literal["V", "U", "both", "none"] = "V"
-    # AntiPaSTO-dplr: rank of the low-rank mixing core in the frozen subspace.
-    antipasto_lora_rank: int = 8
     target_name: list[str] = field(default_factory=lambda: list(DEFAULT_TARGETS))
     layers: str = "all"
     train_dataset: str = "meta-math/MetaMathQA"
@@ -140,16 +127,8 @@ def cfg_for_variant(args: BenchmarkConfig, dtype: torch.dtype) -> ll.AdapterConf
     extra = {"lambda0": args.delora_lambda0} if args.variant == "delora" else {}
     if args.variant == "road":
         extra = {"group_size": args.road_group_size}
-    if args.variant == "antipasto_rot":
+    if args.variant == "antipasto":
         extra = {"rotate_basis": args.antipasto_rotate_basis}
-    if args.variant in ("antipasto", "antipasto_corda", "antipasto_asvd"):
-        extra = {"coeff": args.antipasto_coeff, "suppress_only": args.antipasto_suppress_only}
-    if args.variant == "antipasto_ablate":
-        extra = {"coeff": args.antipasto_coeff, "k": args.antipasto_ablate_k,
-                 "cov_orient": args.antipasto_cov_orient}
-    if args.variant == "antipasto_dplr":
-        extra = {"coeff": args.antipasto_coeff, "suppress_only": args.antipasto_suppress_only,
-                 "lora_rank": args.antipasto_lora_rank}
     return CFG_BY_VARIANT[args.variant](
         r=args.r,
         alpha=args.r if args.variant == "pissa" else args.alpha,
@@ -579,18 +558,14 @@ def run(args: BenchmarkConfig) -> dict[str, Any]:
     dtype = getattr(torch, args.torch_dtype)
     run_commit = current_git_commit()
     run_id = f"{args.model.replace('/', '--')}__{args.variant}__s{args.steps}__seed{args.seed}"
-    # dplr capacity is set by lora_rank, not r, so keep rank-sweep runs from colliding.
-    if args.variant == "antipasto_dplr" and args.antipasto_lora_rank != 8:
-        run_id += f"__k{args.antipasto_lora_rank}"
-    # antipasto family defaults to r=256; low-rank sweeps get their own dirs.
-    if args.variant.startswith("antipasto") and args.r != 256:
+    # antipasto defaults to r=256; low-rank sweeps get their own dirs.
+    if args.variant == "antipasto" and args.r != 256:
         run_id += f"__r{args.r}"
-    # antipasto_rot defaults to rotating V; U/both are ablation axes -> own dirs.
-    if args.variant == "antipasto_rot" and args.antipasto_rotate_basis != "V":
+    # antipasto defaults to rotating V; U/both/none are ablation axes -> own dirs.
+    if args.variant == "antipasto" and args.antipasto_rotate_basis != "V":
         run_id += f"__rot{args.antipasto_rotate_basis}"
-    # antipasto family defaults to lr=5e-3; lr sweeps get their own dirs (the dense/
-    # low-rank cores want a tamer lr than the gain, so this is a real axis).
-    if args.variant.startswith("antipasto") and abs(args.lr - 5e-3) > 1e-9:
+    # antipasto defaults to lr=5e-3; lr sweeps get their own dirs.
+    if args.variant == "antipasto" and abs(args.lr - 5e-3) > 1e-9:
         run_id += f"__lr{args.lr:g}"
     out_dir = args.output_dir / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -600,13 +575,9 @@ def run(args: BenchmarkConfig) -> dict[str, Any]:
     batches, skipped_train_prompt_too_long = make_train_batches(datasets["train"], tokenizer, args)
     print_first_train_sample(tokenizer, batches[0])
     cfg = cfg_for_variant(args, dtype)
-    # Variants with a data-driven group_init need calibration activations from the
-    # downstream task (IPM mode, per CorDA). eva needs only a few batches for its init;
-    # corda/asvd/cov-orient estimate an input second moment, so we hand them many more
-    # batches (PEFT calibrates on a few hundred sequences) for a well-conditioned basis.
-    needs_calib = args.variant in ("eva", "antipasto_corda", "antipasto_asvd") or (
-        args.variant == "antipasto_ablate" and args.antipasto_cov_orient
-    )
+    # eva needs a few calibration batches for its data-driven init. antipasto runs
+    # without calibration (plain weight-SVD init), matching how it was benchmarked.
+    needs_calib = args.variant == "eva"
     init_meter = group_init_meter()            # wall-time + peak CPU RAM of group_init
     if needs_calib:
         n_batches = min(4, len(batches)) if args.variant == "eva" else min(64, len(batches))

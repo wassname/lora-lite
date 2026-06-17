@@ -84,7 +84,7 @@ class EVA:
             with torch.no_grad():
                 for batch in calibration_data:
                     # Padding activations are not task-representative; mask them out of the
-                    # PCA so the basis reflects real tokens (matches antipasto_corda).
+                    # PCA so the basis reflects real tokens.
                     keep.pop("mask", None)
                     if isinstance(batch, dict):
                         if "attention_mask" in batch:

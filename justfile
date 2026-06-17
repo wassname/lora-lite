@@ -83,7 +83,7 @@ metamath-queue variant="lora" steps="5000" model=model:
 
 # Run a single MetaMathQA->GSM8K benchmark for a given variant.
 # Per-variant lr / target-name defaults are baked in here.
-bench-variant model variant steps="5000" lora_rank="8" r_override="" lr_override="" rotate_basis="V" seed="0":
+bench-variant model variant steps="5000" r_override="" lr_override="" rotate_basis="V" seed="0":
 	#!/usr/bin/env bash
 	set -euo pipefail
 	lr=1e-4
@@ -99,14 +99,14 @@ bench-variant model variant steps="5000" lora_rank="8" r_override="" lr_override
 		delora) lr=1e-3 ;;
 		ia3)    lr=5e-3; target='(k_proj|v_proj)$' ;;
 		ia3_ff) lr=5e-3; target='(down_proj)$' ;;
-		# antipasto cores tune only S-space gain/block (tiny params), so a small
-		# r leaves almost nothing trainable; r=256 is the variant default and
-		# matches the published AntiPaSTO row. alpha=r (no extra scaling).
-		antipasto*) lr=5e-3; r=256; alpha=256 ;;
+		# antipasto tunes only S-space deltas + a small block rotation (tiny params),
+		# so a small r leaves almost nothing trainable; r=256 is the variant default
+		# and matches the published AntiPaSTO row. alpha=r (no extra scaling).
+		antipasto) lr=5e-3; r=256; alpha=256 ;;
 	esac
-	# r override (e.g. low-rank corda sweep); alpha tracks r for the antipasto family.
+	# r override (e.g. low-rank sweep); alpha tracks r for antipasto.
 	if [ -n "{{r_override}}" ]; then r="{{r_override}}"; alpha="{{r_override}}"; fi
-	# lr override (e.g. dplr core wants a tamer lr than the gain's 5e-3).
+	# lr override (e.g. a tamer lr than antipasto's 5e-3 default).
 	if [ -n "{{lr_override}}" ]; then lr="{{lr_override}}"; fi
 	# 0.8B + large vocab: HF ForCausalLMLoss upcasts logits to fp32 (bs*seq*vocab*4),
 	# which OOMs the 24GB card at the old bs=4/seq=768. micro-batch 2 fits at ~10GB;
@@ -119,13 +119,12 @@ bench-variant model variant steps="5000" lora_rank="8" r_override="" lr_override
 		--steps {{steps}} \
 		--lr "$lr" \
 		--target-name "$target" \
-		--antipasto-lora-rank {{lora_rank}} \
 		--batch-size 2 --grad-accum 4 --max-seq-length 512 --batch-size-eval 16 \
 		--layers all --r "$r" --alpha "$alpha" \
 		--antipasto-rotate-basis '{{rotate_basis}}' \
 		--seed {{seed}}
 
-metamath-queue-all model=model steps="2500" variants="lora pissa delora dora hra ia3 ia3_ff eva antipasto antipasto_rot antipasto_corda antipasto_asvd antipasto_ablate antipasto_dplr":
+metamath-queue-all model=model steps="2500" variants="lora pissa delora dora hra ia3 ia3_ff eva antipasto":
 	#!/usr/bin/env bash
 	set -euo pipefail
 	# One pueue job per variant (each runs the live code at run time, so editing
