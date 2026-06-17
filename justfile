@@ -83,7 +83,7 @@ metamath-queue variant="lora" steps="5000" model=model:
 
 # Run a single MetaMathQA->GSM8K benchmark for a given variant.
 # Per-variant lr / target-name defaults are baked in here.
-bench-variant model variant steps="5000" lora_rank="8" r_override="" lr_override="" rotate_basis="V":
+bench-variant model variant steps="5000" lora_rank="8" r_override="" lr_override="" rotate_basis="V" seed="0":
 	#!/usr/bin/env bash
 	set -euo pipefail
 	lr=1e-4
@@ -122,7 +122,8 @@ bench-variant model variant steps="5000" lora_rank="8" r_override="" lr_override
 		--antipasto-lora-rank {{lora_rank}} \
 		--batch-size 2 --grad-accum 4 --max-seq-length 512 --batch-size-eval 16 \
 		--layers all --r "$r" --alpha "$alpha" \
-		--antipasto-rotate-basis '{{rotate_basis}}'
+		--antipasto-rotate-basis '{{rotate_basis}}' \
+		--seed {{seed}}
 
 metamath-queue-all model=model steps="2500" variants="lora pissa delora dora hra ia3 ia3_ff eva antipasto antipasto_rot antipasto_corda antipasto_asvd antipasto_ablate antipasto_dplr":
 	#!/usr/bin/env bash
