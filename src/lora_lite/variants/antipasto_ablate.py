@@ -85,9 +85,9 @@ class AntiPaSTOAblate:
             layer.lora_Vh.copy_(Vhr.to(layer.lora_Vh.dtype))
             W_res = (W - (Ur * Sr) @ Vhr).to(layer.weight.dtype)
             layer.weight.data.copy_(W_res)
-            # Optional but recommended: group_init() should warm-start lora_c from the
-            # S-space contrastive direction dS (see sspace.py extract). Random init also
-            # trains, just slower and with no guarantee it finds the behavior direction.
+            # FIXME: lora_c is random-init. A group_init warm-start from the S-space
+            # contrastive direction dS (cf. sspace.py extract) would converge faster and
+            # land on the behavior direction; not implemented -- random trains, just slower.
 
     @staticmethod
     def group_init(model: nn.Module, targets, cfg, calibration_data: CalibrationData | None) -> None:

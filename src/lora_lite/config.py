@@ -1,9 +1,8 @@
 """AdapterConfig: per-variant typed dataclass.
 
-Replaces the older `LoraLiteConfig` + `variant_kwargs` dict. Each variant
-ships its own subclass under `variants/*.py` (e.g. `DeLoRAConfig`), adding
-strongly-typed fields so users discover the knobs via IDE / dataclass
-introspection instead of stringly-typed dict lookups.
+Each variant ships its own subclass under `variants/*.py` (e.g. `DeLoRAConfig`),
+adding strongly-typed fields so the knobs are discoverable via IDE / dataclass
+introspection rather than stringly-typed dict lookups.
 
 Wire-up:
   - `AdapterConfig` holds the universal fields (variant name, rank, alpha,

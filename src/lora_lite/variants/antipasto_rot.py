@@ -1,6 +1,5 @@
-"""AntiPaSTO-Rot: the original SVD adapter with learnable singular-value deltas +
-block-diagonal Cayley rotation. Kept as a SEPARATE variant so we can benchmark the
-rotation version against the rotation-free 1+ELU gain (antipasto.py) head to head.
+"""AntiPaSTO-Rot: SVD adapter with learnable singular-value deltas + a block-diagonal
+Cayley rotation of the frozen basis. The rotation arm vs antipasto.py's gain-only core.
 
 wassname 2026  https://arxiv.org/abs/2601.07473
 
@@ -10,12 +9,7 @@ wassname 2026  https://arxiv.org/abs/2601.07473
     y = x @ W_res.T + ((x @ Vh_eff.T) * (S + delta_s)) @ U_eff.T
 
 Identity at t=0: rot_T=0 -> R=I, delta_s~4e-4 -> y ~ x @ W^T (tiny positive bias on
-delta_s breaks sign symmetry).
-
-Why antipasto.py dropped the rotation: rotating Vh/U leaves the interpretable singular
-basis, and the Cayley solve was numerically finicky. This file preserves it for the
-all-else-equal comparison (does the cross-direction mixing the rotation buys beat the
-cheaper, more stable gain-only adapter on the same targets and budget?).
+delta_s breaks sign symmetry; rotation alone can't).
 
 Refs:
   - paper: https://github.com/wassname/AntiPaSTO

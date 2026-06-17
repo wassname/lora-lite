@@ -142,9 +142,7 @@ def cfg_for_variant(args: BenchmarkConfig, dtype: torch.dtype) -> ll.AdapterConf
         extra = {"group_size": args.road_group_size}
     if args.variant == "antipasto_rot":
         extra = {"rotate_basis": args.antipasto_rotate_basis}
-    if args.variant == "antipasto":
-        extra = {"coeff": args.antipasto_coeff, "suppress_only": args.antipasto_suppress_only}
-    if args.variant in ("antipasto_corda", "antipasto_asvd"):
+    if args.variant in ("antipasto", "antipasto_corda", "antipasto_asvd"):
         extra = {"coeff": args.antipasto_coeff, "suppress_only": args.antipasto_suppress_only}
     if args.variant == "antipasto_ablate":
         extra = {"coeff": args.antipasto_coeff, "k": args.antipasto_ablate_k,

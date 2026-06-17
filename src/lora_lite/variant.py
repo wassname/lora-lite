@@ -24,9 +24,6 @@ class ParamSpec:
             # avoid exact-zero dead zone; N(0, 1e-4) is small enough to be
             # ~identity but nonzero so gradients always have somewhere to go
             t.normal_(0, 1e-4)
-        elif self.init == "near_one":
-            # avoid exact-one dead zone; 1 + N(0, 1e-4)
-            t.fill_(1.0).add_(torch.randn_like(t).mul_(1e-4))
         elif self.init == "ones":
             t.fill_(1.0)
         elif self.init == "kaiming":
@@ -37,7 +34,7 @@ class ParamSpec:
         return t
 
     def make(self, dtype: torch.dtype, device) -> nn.Parameter:
-        # legacy entry: returns a Parameter (used for trainable adapter params)
+        # trainable params -> Parameter; buffers go through make_tensor (see attach)
         if self.as_buffer:
             raise RuntimeError("as_buffer spec must be installed via register_buffer; see adapter.attach")
         return nn.Parameter(self._empty(dtype, device), requires_grad=self.trainable)
