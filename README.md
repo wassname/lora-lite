@@ -84,11 +84,12 @@ off-diagonal orientation is the slowest arm (120 s init vs 2.5 s) and lands slig
 calibration, so plain top-r SVD is the right default for this bounded-gain adapter here.
 
 AntiPaSTO-rot tunes that basis instead of the metric: a block-diagonal Cayley rotation of the
-input (V), output (U), or both. The table row is V (the default); the ablation gives V 57.2 >
-U 56.5 > both 55.6 (single seed). So rotating which inputs feed each frozen direction helps most,
-the output-side rotation is slightly worse, and doing both is worst -- the second rotation is
-redundant capacity that hurts. rot(V) is the best small-parameter arm overall (57.2 at 15K params
-vs LoRA's 59.8 at 3.54M).
+input (V, the table row), output (U), or both. Across two seeds the basis choice is within noise:
+seed0 ranks V 57.2 > U 56.5 > both 55.6, but seed1 flips it to U 57.5 > both 56.9 > V 56.2, and
+the 2-seed test means (U 57.0, V 56.7, both 56.3) span 0.7pp -- inside the ~1pp standard error of
+a 2-seed mean at n=1319. So no rotation basis is reliably best here; the single-seed V>U>both
+ordering was seed variance. rot(V) is the default as a fine, cheapest representative (15K params,
+~230x under LoRA's 3.54M), not a measured winner.
 
 
 ## Developer docs
