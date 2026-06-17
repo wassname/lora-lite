@@ -47,25 +47,48 @@ just qwen-probe  # Qwen/Qwen3-0.6B train/save-load probe
 
 ## Variants
 
-| Variant                                       | 4bit/8bit | GSM8K % | Params     | Peak GPU (GB) |
-| --------------------------------------------- | --------- | ------- | ---------- | ------------- |
-| [LoRA](https://arxiv.org/abs/2106.09685)      | yes       | 63.2%   | 4.59M      | 11.3          |
-| [PiSSA](https://arxiv.org/abs/2404.02948)     | no        | 63.2%   | 4.59M      | 11.3          |
-| [DoRA](https://arxiv.org/abs/2402.09353)      | no        | 62.4%   | 4.67M      | 11.3          |
-| [DeLoRA](https://arxiv.org/abs/2503.18225)    | yes       | 61.5%   | 4.59M      | 11.3          |
-| [AntiPaSTO](https://arxiv.org/abs/2601.07473) | no        | 61.4%   | 35.8K      | 11.5          |
-| [IA3-FF](https://arxiv.org/pdf/2205.05638)    | yes       | 61.4%   | 86K        | 11.4          |
-| [EVA](https://arxiv.org/abs/2410.07170)       | no        | 60.3%   | 4.59M      | 11.3          |
-| [IA3](https://arxiv.org/pdf/2205.05638)       | yes       | 60.0%   | 57K        | 11.4          |
-| [HRA](https://arxiv.org/abs/2405.17484)       | yes       | 61.6%   | 1.84M      | 11.3          |
+Trained on a MetaMathQA subset, tested on GSM8K, all on `Qwen/Qwen3.5-0.8B-Base` targeting
+`down_proj` in all 24 layers (2500 steps, effective batch 8 = 20k samples). Standard adapters
+use r=32; the AntiPaSTO family uses r=256 (it tunes only S-space gain, so it needs the rank).
 
-Params = trainable adapter params. Peak GPU = peak CUDA memory during train+eval (logged from this run onward; older runs predate the column).
+| Variant                                       | test % | valid % | Params  | +MACs/tok | fwd/bwd (ms) | init (s) |
+| --------------------------------------------- | -----: | ------: | ------: | --------: | -----------: | -------: |
+| [DoRA](https://arxiv.org/abs/2402.09353)      |   60.2 |    68.0 |   3.56M |     3.54M |    161 / 556 |     0.16 |
+| [LoRA](https://arxiv.org/abs/2106.09685)      |   59.8 |    68.0 |   3.54M |     3.54M |    173 / 573 |     0.02 |
+| [PiSSA](https://arxiv.org/abs/2404.02948)     |   59.8 |    76.0 |   3.54M |     3.54M |    146 / 549 |     2.04 |
+| [HRA](https://arxiv.org/abs/2405.17484)       |   59.2 |    70.0 |   2.75M |     2.75M |    225 / 948 |     0.04 |
+| [EVA](https://arxiv.org/abs/2410.07170)       |   59.3 |    74.0 |   3.54M |     3.54M |    151 / 660 |     28.3 |
+| [IA3-FF](https://arxiv.org/pdf/2205.05638)    |   56.3 |    62.0 |  0.086M |        0M |    140 / 510 |     0.01 |
+| [DeLoRA](https://arxiv.org/abs/2503.18225)    |   56.2 |    62.0 |   3.54M |     3.54M |    169 / 593 |     0.21 |
+| [AntiPaSTO](https://arxiv.org/abs/2601.07473) |   56.0 |    62.0 |  0.0061M |    28.3M |    166 / 571 |      2.5 |
+| AntiPaSTO-rot                                 |   57.2 |    60.0 |  0.0154M |    28.3M |    165 / 596 |      2.0 |
+| AntiPaSTO-ablate                              |   56.0 |    68.0 |  0.0062M |    28.3M |    166 / 580 |      2.2 |
+| AntiPaSTO-dplr                                |   56.0 |    64.0 |  0.1044M |    28.4M |    153 / 582 |      3.6 |
+| AntiPaSTO-ASVD (diag C)                       |   55.6 |    64.0 |  0.0061M |    28.3M |    150 / 533 |       34 |
+| AntiPaSTO-CorDA (full C)                      |   54.7 |    58.0 |  0.0061M |    28.3M |    146 / 576 |      120 |
+| [IA3](https://arxiv.org/pdf/2205.05638)       |   52.3 |    62.0 |  0.0061M |       0M |    161 / 515 |     0.01 |
 
-Setup: Qwen3-0.6B-Base, MetaMathQA train (5k steps, batch 4 = 20k samples unless noted), r=32, all q/v targets, GSM8K test (1319 examples). HRA used batch 2 (10k samples) due to memory. AntiPaSTO used r=256 (default for this variant).
+test/valid % = GSM8K exact-match accuracy. Params = trainable adapter params. +MACs/tok = added
+forward MACs per token (analytic, hardware-independent). fwd/bwd = median ms over one batch.
+init = one-time calibration (CorDA's `d_in x d_in` covariance eigh; ~0 for the rest). Peak CUDA
+memory is ~9.8 GB for every row. Empty rows fill in as the sweep lands.
 
-Reference: PEFT reports LoRA at 49.0% on Llama-3.2-3B (different model, different sample count). Our numbers are not directly comparable but suggest the adapters work.
+We validate our adapters the same way [PEFT](https://github.com/huggingface/peft/tree/main/method_comparison) does: train on a MetaMathQA subset and check meaningful GSM8K accuracy. See [this file](scripts/metamath_gsm8k_benchmark.py) for details.
 
-AntiPaSTO at 59.5% with 4.5K trainable params (1000x fewer than LoRA's 4.59M). It trains singular-value deltas + block-Cayley rotation within the SVD subspace, so it can rescale and reorient existing directions but not create new ones. Higher rank (r>32) or data-driven dimension selection (from antipasto3) may close the gap further.
+AntiPaSTO is the novel row here: instead of adding trainable directions like LoRA, it freezes W's own top-r SVD and learns only a bounded per-direction gain `S_eff = S * (1 + ELU(g))`. The singular basis stays fixed and interpretable, and the adapter is O(r) params (the 6.1K gain is ~580x smaller than LoRA's 3.54M). The variants change only the basis or core: rot learns a small block-rotation of the frozen basis, CorDA/ASVD orient it by the input second moment (full covariance vs diagonal-only, [Yang+ 2024](https://arxiv.org/abs/2406.05223) / [Yuan+ 2023](https://arxiv.org/abs/2312.05821)), ablate learns a contractive directional ablation ([Arditi+ 2024](https://arxiv.org/abs/2406.11717)), dplr adds a small low-rank core for cross-direction mixing.
+
+CorDA (full C) and ASVD (diag C) are a metric-axis ablation against plain AntiPaSTO (C=I): does
+covariance orientation earn its `d_in x d_in` eigh over the cheap diagonal or no calibration at
+all? On GSM8K/down_proj the answer is no: C=I 56.0, diag C 55.6, full C 54.7 (single seed). The
+off-diagonal orientation is the slowest arm (120 s init vs 2.5 s) and lands slightly *below* no
+calibration, so plain top-r SVD is the right default for this bounded-gain adapter here.
+
+AntiPaSTO-rot tunes that basis instead of the metric: a block-diagonal Cayley rotation of the
+input (V), output (U), or both. The table row is V (the default); the ablation gives V 57.2 >
+U 56.5 > both 55.6 (single seed). So rotating which inputs feed each frozen direction helps most,
+the output-side rotation is slightly worse, and doing both is worst -- the second rotation is
+redundant capacity that hurts. rot(V) is the best small-parameter arm overall (57.2 at 15K params
+vs LoRA's 59.8 at 3.54M).
 
 
 ## Developer docs

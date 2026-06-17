@@ -63,12 +63,15 @@ class EVA:
         # Collect input activations per target via forward hooks.
         layers = {name: layer for name, layer, _ in targets}
         captured: dict[str, list[T]] = {n: [] for n in layers}
+        keep: dict[str, T] = {}                            # non-pad mask of the in-flight batch
 
         def make_hook(name):
             def _h(module, args, kwargs):
                 # signature: pre-forward, args[0] is the input tensor
-                x = args[0].detach()
-                captured[name].append(rearrange(x, "... d -> (...) d").to(torch.float32).cpu())
+                x = rearrange(args[0].detach(), "... d -> (...) d").to(torch.float32).cpu()
+                if "mask" in keep:
+                    x = x[keep["mask"]]                    # drop padding positions (see loop below)
+                captured[name].append(x)
             return _h
 
         handles = [
@@ -80,7 +83,12 @@ class EVA:
             model.eval()
             with torch.no_grad():
                 for batch in calibration_data:
+                    # Padding activations are not task-representative; mask them out of the
+                    # PCA so the basis reflects real tokens (matches antipasto_corda).
+                    keep.pop("mask", None)
                     if isinstance(batch, dict):
+                        if "attention_mask" in batch:
+                            keep["mask"] = rearrange(batch["attention_mask"], "... -> (...)").bool().cpu()
                         model(**batch)
                     elif isinstance(batch, (list, tuple)):
                         model(*batch)

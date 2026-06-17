@@ -20,6 +20,11 @@ from .variants.dora import DoRAConfig
 from .variants.hra import HRAConfig
 from .variants.eva import EVAConfig
 from .variants.antipasto import AntiPaSTOConfig
+from .variants.antipasto_rot import AntiPaSTORotConfig
+from .variants.antipasto_ablate import AntiPaSTOAblateConfig
+from .variants.antipasto_corda import AntiPaSTOCorDAConfig
+from .variants.antipasto_asvd import AntiPaSTOASVDConfig
+from .variants.antipasto_dplr import AntiPaSTODPLRConfig
 from .variants.road import RoadConfig
 
 __all__ = [
@@ -33,6 +38,11 @@ __all__ = [
     "HRAConfig",
     "EVAConfig",
     "AntiPaSTOConfig",
+    "AntiPaSTORotConfig",
+    "AntiPaSTOAblateConfig",
+    "AntiPaSTOCorDAConfig",
+    "AntiPaSTOASVDConfig",
+    "AntiPaSTODPLRConfig",
     "RoadConfig",
     "attach",
     "detach",

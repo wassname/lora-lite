@@ -1,32 +1,30 @@
-"""AntiPaSTO: SVD steering with learnable singular-value deltas + block-diagonal Cayley rotation.
+"""AntiPaSTO: learnable bounded reweighting of frozen SVD singular values.
 
 wassname 2026  https://arxiv.org/abs/2601.07473
 
-    W = U diag(S) Vh + W_res        (top-r SVD; W_res = W - U_r S_r Vh_r)
-    learn: delta_s (r,), rot_T (n_blocks, bs(bs-1)/2)
-    R = block_diag(Cayley(skew(rot_T)));  Vh_eff = R @ Vh (or U_eff = U @ R.T)
-    y = x @ W_res.T + ((x @ Vh_eff.T) * (S + delta_s)) @ U_eff.T
+    W = U diag(S) Vh + W_res           # top-r SVD; W_res = W - U_r S_r Vh_r, frozen
+    learn: g (r,)                      # per-direction gain
+    S_eff = S * (1 + ELU(coeff * g))   # exp(z) for z<0 (bounded), 1+z for z>0
+    y = x @ W_res.T + ((x @ Vh.T) * S_eff) @ U.T
 
-Identity at t=0: rot_T=0 -> R=I, delta_s~4e-4 -> y ≈ x @ W^T (fp32 SVD round-trip, tiny positive bias on delta_s breaks sign symmetry).
+    suppress_only: clamp g<=0 -> S_eff in (0, S], attenuation only.
+    coeff:         runtime scale; 0 = identity, <0 swaps amplify/suppress.
 
-TODO remove rambling
-Scope cut vs antipasto3: this is a fine-tuning adapter, not the full runtime
-steering interface. There is no per-call alpha, so it does not expose the
-bidirectional R(+alpha) / R(-alpha) inference symmetry. The V-basis path uses the
-opposite chirality to antipasto3's default U-basis path, so checkpoints are not
-portable without a sign/basis convention.
+Identity at g=0 or coeff=0: 1+ELU(0)=1, so S_eff=S (up to the bf16 SVD round-trip).
+The basis (U, Vh) is frozen, so the singular directions stay interpretable and only
+the gain is learned. See forward() for why 1+ELU over linear/exp/tanh.
 
 Refs:
   - paper: https://github.com/wassname/AntiPaSTO
-  - lite port of: https://github.com/wassname/antipasto3
-    (offline: docs/refs/antipasto3_svd_adapter.py)
+  - sibling (whitened, mean-diff): steering-lite/.../sspace.py
+  - selection: Wanda (Sun+ 2023, arXiv:2306.11695), ASVD (Yuan+ 2023, arXiv:2312.05821)
+  - top-r SVD init: PiSSA (Meng+ 2024, arXiv:2404.02948)
 """
-import math
 from dataclasses import dataclass
 from typing import Iterable, Literal
 
 import torch
-from einops import einsum, rearrange
+from einops import rearrange
 from jaxtyping import Float
 from torch import nn, Tensor as T
 
@@ -41,35 +39,17 @@ CalibrationData = Iterable[CalibrationBatch]
 @dataclass
 class AntiPaSTOConfig(AdapterConfig):
     variant: str = "antipasto"
-    # Higher default than LoRA (r=8) since trainable params scale as r + r/bs*bs*(bs-1)/2, not r*(d_in+d_out).
+    # Only r + r trainable scalars, so r can be large.
     r: int = 256
-    
-    # Block size for the block-diagonal Cayley rotation. r must be divisible by it.
-    block_size: int = 4
-    # Cayley map saturation: bounds rotation angle to ~max_rotation_angle radians.
-    max_rotation_angle: float = 0.5
-    # Which singular basis to rotate: 'V' (input), 'U' (output), or 'none'.
-    rotate_basis: Literal["V", "U", "none"] = "V"
-
-
-def _cayley(skew: torch.Tensor) -> torch.Tensor:
-    """R = (I - X)^-1 (I + X) for X = skew/2; preserves orthogonality."""
-    bs = skew.shape[-1]
-    eye = torch.eye(bs, dtype=skew.dtype, device=skew.device).expand_as(skew)
-    X = skew / 2
-    return torch.linalg.solve(eye - X, eye + X)
-
-
-def _build_rotation(rot_T: torch.Tensor, bs: int, max_angle: float) -> torch.Tensor:
-    """rot_T: (n_blocks, bs*(bs-1)/2) -> R: (n_blocks, bs, bs) Cayley rotation."""
-    n_blocks, _ = rot_T.shape
-    rows, cols = torch.triu_indices(bs, bs, offset=1, device=rot_T.device).unbind(0)
-    A = torch.zeros(n_blocks, bs, bs, dtype=rot_T.dtype, device=rot_T.device)
-    A[:, rows, cols] = rot_T
-    A = 0.5 * (A - A.transpose(-1, -2))
-    a_limit = 2.0 * math.tan(max_angle / 2.0)
-    A = a_limit * torch.tanh(A / a_limit)
-    return _cayley(A)
+    # Per-direction reweighting is S_eff = S * (1 + ELU(coeff * g)). See forward()
+    # for the why; identity at g=0 or coeff=0, positive always, no free bound knob.
+    suppress_only: bool = False  # clamp g<=0 -> factor in (0,1]: attenuation only.
+    #   Guarantee holds for coeff>=0; coeff<0 inverts the product and re-amplifies.
+    # Runtime steering scale. 0 = identity. <0 inverts (swaps amplify/suppress).
+    coeff: float = 1.0
+    # group_init Wanda-style pooling of |X @ Vh[i]|: 'rms' is outlier-sensitive
+    # (ASVD intuition), 'mean_abs' is the original outlier-robust pooling.
+    act_pool: Literal["rms", "mean_abs"] = "rms"
 
 
 @register
@@ -79,24 +59,14 @@ class AntiPaSTO:
     @staticmethod
     def param_specs(d_in, d_out, cfg):
         r = cfg.r
-        bs = int(cfg.block_size)
-        if r % bs != 0:
-            raise ValueError(f"AntiPaSTO requires r={r} divisible by block_size={bs}")
-        specs = dict(
-            # Frozen SVD components captured at init.
+        return dict(
+            # Frozen top-r SVD captured at init.
             lora_U=ParamSpec((d_out, r), init="zeros", trainable=False, as_buffer=True),
             lora_S=ParamSpec((r,), init="zeros", trainable=False, as_buffer=True),
             lora_Vh=ParamSpec((r, d_in), init="zeros", trainable=False, as_buffer=True),
-            # Trainable: per-singular-value delta.
-            # antipasto3 uses 4e-4 + N(0, 4e-4): small positive bias breaks sign
-            # symmetry (rotation alone can't); zero-init works but trains slower.
-            lora_delta_s=ParamSpec((r,), init=lambda t: t.normal_(0, 4e-4).add_(4e-4)),
+            # Trainable per-direction log-scale. init 0 -> 1+ELU(0)=1 -> identity.
+            lora_g=ParamSpec((r,), init="zeros"),
         )
-        if cfg.rotate_basis != "none":
-            n_blocks = r // bs
-            n_triu = bs * (bs - 1) // 2
-            specs["lora_rot_T"] = ParamSpec((n_blocks, n_triu), init="zeros")
-        return specs
 
     @staticmethod
     def init(layer: nn.Module, cfg) -> None:
@@ -115,18 +85,19 @@ class AntiPaSTO:
             layer.lora_Vh.copy_(Vhr.to(layer.lora_Vh.dtype))
             W_res = (W - (Ur * Sr) @ Vhr).to(layer.weight.dtype)
             layer.weight.data.copy_(W_res)
-            # group_init() refines this to input-aligned directions if calibration_data is given.
+            # group_init() refines the dimension selection if calibration_data is given.
 
     @staticmethod
     def group_init(model: nn.Module, targets, cfg, calibration_data: CalibrationData | None) -> None:
-        """Wanda-style data-driven dimension selection within the weight SVD.
+        """Data-driven re-selection of which top-r singular directions to keep.
 
-        init() picks the top-r singular dimensions by S alone (PiSSA-style).
-        group_init() re-selects based on S[i] * mean|X @ Vh[i]|: dimensions
-        that are both large in W AND active given real inputs.
-        FIXME os that corda? or pissa? wanted corda. and or ASVD
+            init():       top-r by S alone (PiSSA-style)
+            group_init(): top-r by score[i] = S[i] * pool|X @ Vh[i]|   (Wanda/ASVD)
+            pool = 'rms' (outlier-sensitive) | 'mean_abs' (outlier-robust)
 
-        If calibration_data is None the weight-SVD init from init() is kept.
+        This re-RANKS W's own singular vectors by activation; it does NOT re-orient
+        the basis (that is CorDA -> antipasto_corda.py). So the kept directions are
+        still plain weight-SVD directions, just a better subset. None -> keep init().
         """
         if calibration_data is None:
             return
@@ -162,6 +133,7 @@ class AntiPaSTO:
                 h.remove()
 
         r = cfg.r
+        pool = cfg.act_pool
         for name, layer in layers.items():
             X = torch.cat(captured[name], dim=0)          # (N, d_in)
             if X.shape[0] < r:
@@ -169,20 +141,23 @@ class AntiPaSTO:
                     f"AntiPaSTO at {name}: only {X.shape[0]} calibration tokens, need >= r={r}"
                 )
 
-            # Recover W_orig: init() wrote W_res into layer.weight and stored top-r components
-            # FIXME isnt this run after, not instead of init. so this is using cropped matrixes
+            # Rebuild the FULL W: init() stored the exact top-r it subtracted, so
+            # W_res + U_r S_r Vh_r == W (full rank, not a cropped matrix). The SVD
+            # below therefore re-selects from W's whole spectrum, not a truncation.
             W_res = layer.weight.data.float()
-            U_old = layer.lora_U.float()                  # (d_out, r)
-            S_old = layer.lora_S.float()                  # (r,)
-            Vh_old = layer.lora_Vh.float()                # (r, d_in)
+            U_old = layer.lora_U.float()
+            S_old = layer.lora_S.float()
+            Vh_old = layer.lora_Vh.float()
             W_orig = W_res + (U_old * S_old.unsqueeze(0)) @ Vh_old
 
-            # Full SVD to score all dimensions
             U_full, S_full, Vh_full = torch.linalg.svd(W_orig, full_matrices=False)
-            # score[i] = S[i] * mean|X @ Vh[i]|  (Wanda: weight magnitude × activation magnitude)
-            act_mag = (X @ Vh_full.T).abs().mean(dim=0)  # (k,)
+            proj = X.to(Vh_full) @ Vh_full.T              # (N, r) input in S-coords (X CPU -> GPU here)
+            if pool == "rms":
+                act_mag = proj.pow(2).mean(dim=0).sqrt()  # outlier-sensitive
+            else:
+                act_mag = proj.abs().mean(dim=0)          # outlier-robust (original)
             scores = S_full * act_mag
-            idx = scores.argsort(descending=True)[:r]    # top-r by joint importance
+            idx = scores.argsort(descending=True)[:r]     # top-r by joint importance
             idx = idx.sort().values                       # stable ordering
 
             Ur, Sr, Vhr = U_full[:, idx], S_full[idx], Vh_full[idx]
@@ -201,35 +176,23 @@ class AntiPaSTO:
         y: Float[T, '*B o'],
     ) -> Float[T, '*B o']:
         cfg = layer._lora_cfg
-        bs = int(cfg.block_size)
-        max_angle = float(cfg.max_rotation_angle)
-        rotate_basis = cfg.rotate_basis
-
         U = layer.lora_U.to(x.dtype)                          # (d_out, r)
         S = layer.lora_S.to(x.dtype)                          # (r,)
         Vh = layer.lora_Vh.to(x.dtype)                        # (r, d_in)
+        g = layer.lora_g.to(x.dtype)                          # (r,)
+        coeff = float(cfg.coeff)
 
-        if rotate_basis == "none":
-            U_eff, Vh_eff = U, Vh
-        else:
-            R_blocks = _build_rotation(layer.lora_rot_T.float(), bs, max_angle).to(x.dtype)
-            n_blocks = R_blocks.shape[0]                      # R_blocks: (n, bs, bs)
-            if rotate_basis == "V":
-                Vh_blocks = rearrange(Vh, "(n a) i -> n a i", n=n_blocks)
-                Vh_rot = einsum(R_blocks, Vh_blocks, "n a b, n b i -> n a i")
-                Vh_eff = rearrange(Vh_rot, "n a i -> (n a) i")
-                U_eff = U
-            elif rotate_basis == "U":
-                U_blocks = rearrange(U, "d (n b) -> d n b", n=n_blocks)
-                U_rot = einsum(U_blocks, R_blocks, "d n b, n c b -> d n c")
-                U_eff = rearrange(U_rot, "d n c -> d (n c)")
-                Vh_eff = Vh
-            else:
-                raise ValueError(f"rotate_basis must be 'U', 'V', or 'none', got {rotate_basis!r}")
+        if cfg.suppress_only:
+            g = torch.clamp(g, max=0.0)                       # factor in (0,1]: attenuation only
 
-        # FIXME: try lora_delta_s as [r,k] this is because the main limit of this adapter is that it's under parametised here. `reduce(h @ U_eff.T, '... k -> ...'). But have to make sure it's not lienarly reducable to one adapter.
-        S_eff = S + layer.lora_delta_s.to(x.dtype)            # (r,)
-        h = x @ Vh_eff.T                                      # x @ Vh_eff.T
-        h = h * S_eff                                         # diag(S_eff)
-        delta = h @ U_eff.T                                   # @ U_eff.T
-        return y + delta
+        # S_eff = S * (1 + ELU(z)),  z = coeff*g,  1+ELU(z) = exp(z) for z<=0 else 1+z.
+        # Why 1+ELU and not the obvious alternatives:
+        #   linear S*(1+z)  : z<-1 -> S_eff<0, a sign flip that drives incoherence.
+        #   exp    S*exp(z) : unbounded, gradient self-amplifies (amplification blows up).
+        #   tanh   bounded  : arbitrary bound knob, saturation kills the gradient.
+        # 1+ELU uses each in its safe regime: exp where it is bounded in (0,1]
+        # (attenuation), linear where exp would diverge (amplification). >0 always.
+        S_eff = S * (1.0 + torch.nn.functional.elu(coeff * g))
+
+        h = (x @ Vh.T) * S_eff                               # input in S-coords, reweighted
+        return y + h @ U.T
