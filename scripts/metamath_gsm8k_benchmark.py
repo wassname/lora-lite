@@ -604,9 +604,9 @@ def run(args: BenchmarkConfig) -> dict[str, Any]:
     # downstream task (IPM mode, per CorDA). eva needs only a few batches for its init;
     # corda/asvd/cov-orient estimate an input second moment, so we hand them many more
     # batches (PEFT calibrates on a few hundred sequences) for a well-conditioned basis.
-    # antipasto_ablate always calibrates now: group_init warm-starts lora_c from the
-    # S-space output variance (cov_orient adds the heavier CorDA re-orient on top).
-    needs_calib = args.variant in ("eva", "antipasto_corda", "antipasto_asvd", "antipasto_ablate")
+    needs_calib = args.variant in ("eva", "antipasto_corda", "antipasto_asvd") or (
+        args.variant == "antipasto_ablate" and args.antipasto_cov_orient
+    )
     init_meter = group_init_meter()            # wall-time + peak CPU RAM of group_init
     if needs_calib:
         n_batches = min(4, len(batches)) if args.variant == "eva" else min(64, len(batches))
