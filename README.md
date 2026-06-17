@@ -58,8 +58,8 @@ use r=32; the AntiPaSTO family uses r=256 (it tunes only S-space gain, so it nee
 | [DoRA](https://arxiv.org/abs/2402.09353)      |   60.2 |    68.0 |   3.56M |     3.54M |    161 / 556 |     0.16 |
 | [DeLoRA](https://arxiv.org/abs/2503.18225)    |   56.2 |    62.0 |   3.54M |     3.54M |    169 / 593 |     0.21 |
 | [HRA](https://arxiv.org/abs/2405.17484)       |   59.2 |    70.0 |   2.75M |     2.75M |    225 / 948 |     0.04 |
-| [EVA](https://arxiv.org/abs/2410.07170)       |      — |       — |       — |         — |            — |        — |
-| [IA3](https://arxiv.org/pdf/2205.05638)       |      — |       — |       — |         — |            — |        — |
+| [EVA](https://arxiv.org/abs/2410.07170)       |   59.3 |    74.0 |   3.54M |     3.54M |    151 / 660 |    28.3 |
+| [IA3](https://arxiv.org/pdf/2205.05638)       |   52.3 |    62.0 |  0.0061M |        0M |    161 / 515 |    0.01 |
 | [IA3-FF](https://arxiv.org/pdf/2205.05638)    |      — |       — |       — |         — |            — |        — |
 | [AntiPaSTO](https://arxiv.org/abs/2601.07473) |   56.0 |    62.0 |  0.0061M |    28.3M |    166 / 571 |      2.5 |
 | AntiPaSTO-rot                                 |   57.2 |    60.0 |  0.0154M |    28.3M |    165 / 596 |      2.0 |
