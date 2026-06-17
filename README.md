@@ -53,20 +53,20 @@ use r=32; the AntiPaSTO family uses r=256 (it tunes only S-space gain, so it nee
 
 | Variant                                       | test % | valid % | Params  | +MACs/tok | fwd/bwd (ms) | init (s) |
 | --------------------------------------------- | -----: | ------: | ------: | --------: | -----------: | -------: |
+| [DoRA](https://arxiv.org/abs/2402.09353)      |   60.2 |    68.0 |   3.56M |     3.54M |    161 / 556 |     0.16 |
 | [LoRA](https://arxiv.org/abs/2106.09685)      |   59.8 |    68.0 |   3.54M |     3.54M |    173 / 573 |     0.02 |
 | [PiSSA](https://arxiv.org/abs/2404.02948)     |   59.8 |    76.0 |   3.54M |     3.54M |    146 / 549 |     2.04 |
-| [DoRA](https://arxiv.org/abs/2402.09353)      |   60.2 |    68.0 |   3.56M |     3.54M |    161 / 556 |     0.16 |
-| [DeLoRA](https://arxiv.org/abs/2503.18225)    |   56.2 |    62.0 |   3.54M |     3.54M |    169 / 593 |     0.21 |
 | [HRA](https://arxiv.org/abs/2405.17484)       |   59.2 |    70.0 |   2.75M |     2.75M |    225 / 948 |     0.04 |
-| [EVA](https://arxiv.org/abs/2410.07170)       |   59.3 |    74.0 |   3.54M |     3.54M |    151 / 660 |    28.3 |
-| [IA3](https://arxiv.org/pdf/2205.05638)       |   52.3 |    62.0 |  0.0061M |        0M |    161 / 515 |    0.01 |
-| [IA3-FF](https://arxiv.org/pdf/2205.05638)    |   56.3 |    62.0 |  0.086M |        0M |    140 / 510 |    0.01 |
+| [EVA](https://arxiv.org/abs/2410.07170)       |   59.3 |    74.0 |   3.54M |     3.54M |    151 / 660 |     28.3 |
+| [IA3-FF](https://arxiv.org/pdf/2205.05638)    |   56.3 |    62.0 |  0.086M |        0M |    140 / 510 |     0.01 |
+| [DeLoRA](https://arxiv.org/abs/2503.18225)    |   56.2 |    62.0 |   3.54M |     3.54M |    169 / 593 |     0.21 |
 | [AntiPaSTO](https://arxiv.org/abs/2601.07473) |   56.0 |    62.0 |  0.0061M |    28.3M |    166 / 571 |      2.5 |
 | AntiPaSTO-rot                                 |   57.2 |    60.0 |  0.0154M |    28.3M |    165 / 596 |      2.0 |
-| AntiPaSTO-CorDA (full C)                      |   54.7 |    58.0 |  0.0061M |    28.3M |    146 / 576 |      120 |
-| AntiPaSTO-ASVD (diag C)                       |   55.6 |    64.0 |  0.0061M |    28.3M |    150 / 533 |       34 |
 | AntiPaSTO-ablate                              |   56.0 |    68.0 |  0.0062M |    28.3M |    166 / 580 |      2.2 |
 | AntiPaSTO-dplr                                |   56.0 |    64.0 |  0.1044M |    28.4M |    153 / 582 |      3.6 |
+| AntiPaSTO-ASVD (diag C)                       |   55.6 |    64.0 |  0.0061M |    28.3M |    150 / 533 |       34 |
+| AntiPaSTO-CorDA (full C)                      |   54.7 |    58.0 |  0.0061M |    28.3M |    146 / 576 |      120 |
+| [IA3](https://arxiv.org/pdf/2205.05638)       |   52.3 |    62.0 |  0.0061M |       0M |    161 / 515 |     0.01 |
 
 test/valid % = GSM8K exact-match accuracy. Params = trainable adapter params. +MACs/tok = added
 forward MACs per token (analytic, hardware-independent). fwd/bwd = median ms over one batch.
