@@ -83,7 +83,7 @@ metamath-queue variant="lora" steps="5000" model=model:
 
 # Run a single MetaMathQA->GSM8K benchmark for a given variant.
 # Per-variant lr / target-name defaults are baked in here.
-bench-variant model variant steps="5000" r_override="" lr_override="" rotate_basis="V" seed="0":
+bench-variant model variant steps="5000" r_override="" lr_override="" rotate_basis="V" seed="0" target_override="":
 	#!/usr/bin/env bash
 	set -euo pipefail
 	lr=1e-4
@@ -91,6 +91,7 @@ bench-variant model variant steps="5000" r_override="" lr_override="" rotate_bas
 	# only 6 full-attention layers) and CorDA/ASVD's canonical highest-d_in target.
 	target='(down_proj)$'
 	r=32; alpha=64
+	out_dir=outputs/metamath_gsm8k
 	# IA3 lr: paper uses 3e-3 to 1e-2 (Liu et al. 2022 §3.3). Also a hard
 	# bf16 floor: lora_g inits to 1.0 where bf16 spacing is ~7.8e-3, so
 	# AdamW updates with lr<<3.9e-3 round back to 1.0 and the param freezes.
@@ -112,6 +113,10 @@ bench-variant model variant steps="5000" r_override="" lr_override="" rotate_bas
 	if [ -n "{{r_override}}" ]; then r="{{r_override}}"; alpha="{{r_override}}"; fi
 	# lr override (e.g. a tamer lr than antipasto's 5e-3 default).
 	if [ -n "{{lr_override}}" ]; then lr="{{lr_override}}"; fi
+	# target override (e.g. LoRA-XS paper spreads across all q/k/v/o + FFN linears, not
+	# just down_proj). run_id ignores target, so route overrides to their own dir to
+	# avoid clobbering the canonical down_proj results the README table is built from.
+	if [ -n "{{target_override}}" ]; then target="{{target_override}}"; out_dir=outputs/metamath_gsm8k_alllinear; fi
 	# 0.8B + large vocab: HF ForCausalLMLoss upcasts logits to fp32 (bs*seq*vocab*4),
 	# which OOMs the 24GB card at the old bs=4/seq=768. micro-batch 2 fits at ~10GB;
 	# grad-accum 4 -> effective batch 8 (optimization quality without the memory).
@@ -126,6 +131,7 @@ bench-variant model variant steps="5000" r_override="" lr_override="" rotate_bas
 		--batch-size 2 --grad-accum 4 --max-seq-length 512 --batch-size-eval 16 \
 		--layers all --r "$r" --alpha "$alpha" \
 		--antipasto-rotate-basis '{{rotate_basis}}' \
+		--output-dir "$out_dir" \
 		--seed {{seed}}
 
 metamath-queue-all model=model steps="2500" variants="lora pissa delora dora hra ia3 ia3_ff eva antipasto":
