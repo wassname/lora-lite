@@ -13,8 +13,10 @@ the full W, and R (init normal(0, 1e-5)) starts the adapter at ~identity. So the
 trainable tensor is r*r (e.g. r=32 -> 1024 params/layer), hence "extremely small".
 
 The reference folds all singular values into A and leaves B as the raw left singular
-vectors; R sits between two frozen, near-orthonormal bases. Their LLaMA math-tuning
-config sets lora_alpha = r (scale = 1.0) and lr ~ 4e-3 (scripts/run_math_tuning.sh).
+vectors. So R sits between B = Ur (orthonormal) and A = diag(Sr) Vhr (orthonormal rows
+*scaled* by the singular values, so row norms = Sr, not unit) -- the asymmetry is the
+reference's, not a bug. Their LLaMA math-tuning config sets lora_alpha = r (scale = 1.0)
+and lr ~ 4e-3 (scripts/run_math_tuning.sh).
 
 Refs:
   - paper repo: https://github.com/MohammadrezaBanaei/LoRA-XS
