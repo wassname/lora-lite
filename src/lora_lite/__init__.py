@@ -13,6 +13,7 @@ from . import variants  # noqa: F401  triggers variant + config registration
 
 # Expose per-variant config classes for ergonomic typed construction.
 from .variants.lora import LoRAConfig
+from .variants.lora_xs import LoRAXSConfig
 from .variants.pissa import PiSSAConfig
 from .variants.delora import DeLoRAConfig
 from .variants.ia3 import IA3Config, IA3FFConfig
@@ -25,6 +26,7 @@ from .variants.road import RoadConfig
 __all__ = [
     "AdapterConfig",
     "LoRAConfig",
+    "LoRAXSConfig",
     "PiSSAConfig",
     "DeLoRAConfig",
     "IA3Config",

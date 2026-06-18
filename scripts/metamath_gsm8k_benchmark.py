@@ -27,6 +27,7 @@ DEFAULT_TARGETS = (r"(q_proj|v_proj)$",)
 
 CFG_BY_VARIANT = {
     "lora": ll.LoRAConfig,
+    "lora_xs": ll.LoRAXSConfig,
     "pissa": ll.PiSSAConfig,
     "delora": ll.DeLoRAConfig,
     "ia3": ll.IA3Config,
@@ -44,7 +45,7 @@ class BenchmarkConfig:
     """MetaMathQA -> GSM8K benchmark config. Tyro turns this into the CLI."""
 
     model: str = "Qwen/Qwen3.5-0.8B-Base"
-    variant: Literal["lora", "pissa", "delora", "ia3", "ia3_ff", "dora", "hra", "eva", "antipasto", "road"] = "lora"
+    variant: Literal["lora", "lora_xs", "pissa", "delora", "ia3", "ia3_ff", "dora", "hra", "eva", "antipasto", "road"] = "lora"
     mode: Literal["benchmark", "probe"] = "benchmark"
     device: str = "cuda"
     torch_dtype: str = "bfloat16"
@@ -158,7 +159,7 @@ def count_base_grad_leaks(model: torch.nn.Module) -> int:
 
 
 def perturb_first_adapter(model: torch.nn.Module) -> None:
-    priority = ("lora_B", "lora_g", "lora_c", "lora_alpha", "lora_U", "lora_A", "lora_lambda", "lora_gate", "lora_delta_s", "lora_m", "lora_road_theta", "lora_road_alpha")
+    priority = ("lora_B", "lora_R", "lora_g", "lora_c", "lora_alpha", "lora_U", "lora_A", "lora_lambda", "lora_gate", "lora_delta_s", "lora_m", "lora_road_theta", "lora_road_alpha")
     for key in priority:
         for _, p in model.named_parameters():
             if p.requires_grad and key in _:

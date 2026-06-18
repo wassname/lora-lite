@@ -32,12 +32,12 @@ sys.modules[SPEC.name] = benchmark
 SPEC.loader.exec_module(benchmark)
 
 
-VARIANTS = ["lora", "pissa", "delora", "ia3", "ia3_ff", "dora", "hra", "eva",
+VARIANTS = ["lora", "lora_xs", "pissa", "delora", "ia3", "ia3_ff", "dora", "hra", "eva",
             "antipasto", "road"]
 # Variants that fail loud when attached on a bnb-loaded base (read dense weight in init).
 # delora/eva also read weight but currently silently dequant -- they produce sane attach,
 # so we don't expect a raise from them in the attach-only smoke.
-BNB_RAISERS = {"pissa", "dora", "antipasto"}
+BNB_RAISERS = {"pissa", "dora", "antipasto", "lora_xs"}
 TINY_MODEL = "hf-internal-testing/tiny-random-LlamaForCausalLM"
 
 HAS_CUDA = torch.cuda.is_available()

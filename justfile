@@ -103,6 +103,10 @@ bench-variant model variant steps="5000" r_override="" lr_override="" rotate_bas
 		# so a small r leaves almost nothing trainable; r=256 is the variant default
 		# and matches the published AntiPaSTO row. alpha=r (no extra scaling).
 		antipasto) lr=5e-3; r=256; alpha=256 ;;
+		# LoRA-XS trains only the r*r core R between frozen SVD factors. Ref LLaMA
+		# math config sets lora_alpha=r (scale=1) and lr=4e-3 (run_math_tuning.sh);
+		# keep r=32 to share the subspace dim with LoRA/PiSSA (all-else-equal rank axis).
+		lora_xs) lr=4e-3; alpha=32 ;;
 	esac
 	# r override (e.g. low-rank sweep); alpha tracks r for antipasto.
 	if [ -n "{{r_override}}" ]; then r="{{r_override}}"; alpha="{{r_override}}"; fi
