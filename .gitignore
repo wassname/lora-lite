@@ -20,5 +20,5 @@ docs/papers/*.txt
 docs/papers/md/
 # external-review scratch (raw model output, stderr); curated *.md reviews stay tracked
 .pi/
-docs/reviews/raw*.jsonl
-docs/reviews/err*.txt
+docs/reviews/*raw*.jsonl
+docs/reviews/*err*.txt
