@@ -58,6 +58,7 @@ Trained on a MetaMathQA subset, tested on GSM8K, all on `Qwen/Qwen3.5-0.8B-Base`
 | [EVA](https://arxiv.org/abs/2410.07170)       |   32 |   59.3 |    74.0 |   3.54M |     3.54M |    151 / 660 |     28.3 |
 | [HRA](https://arxiv.org/abs/2405.17484)       |   32 |   59.2 |    70.0 |   2.75M |     2.75M |    225 / 948 |     0.04 |
 | [AntiPaSTO](https://arxiv.org/abs/2601.07473) |  256 |   57.2 |    60.0 |  0.015M |     28.3M |    165 / 596 |      2.0 |
+| [LoRA-XS](https://arxiv.org/abs/2405.17604)   |   32 |   56.8 |    68.0 |  0.025M |     3.56M |    162 / 575 |     2.22 |
 | [IA3-FF](https://arxiv.org/pdf/2205.05638)    |    — |   56.3 |    62.0 |  0.086M |        0M |    140 / 510 |     0.01 |
 | [DeLoRA](https://arxiv.org/abs/2503.18225)    |   32 |   56.2 |    62.0 |   3.54M |     3.54M |    169 / 593 |     0.21 |
 | [IA3](https://arxiv.org/pdf/2205.05638)       |    — |   52.3 |    62.0 |  0.006M |        0M |    161 / 515 |     0.01 |
