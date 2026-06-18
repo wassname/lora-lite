@@ -69,6 +69,12 @@ fwd/bwd = median ms over one batch. init = one-time calibration (EVA's PCA; ~0 f
 CUDA memory is ~9.8 GB for every row. Single seed, so accuracy differences within ~1.4pp (test
 SE at n=1319) are noise.
 
+Every row targets `down_proj` only, for an all-else-equal rank comparison. LoRA-XS is the one
+method whose paper instead spreads across all q/k/v/o + FFN linears. Trying that here (150 modules,
+0.154M params) did not help: test 55.6 / valid 62.0, slightly below the down_proj row at 6x the
+params, within single-seed noise. So down_proj-only stays its table entry. Result:
+`outputs/metamath_gsm8k_alllinear/Qwen--Qwen3.5-0.8B-Base__lora_xs__s2500__seed0/result.json`.
+
 We validate our adapters the same way [PEFT](https://github.com/huggingface/peft/tree/main/method_comparison) does: train on a MetaMathQA subset and check meaningful GSM8K accuracy. See [this file](scripts/metamath_gsm8k_benchmark.py) for details.
 
 AntiPaSTO is the novel row here: instead of adding trainable directions like LoRA, it freezes W's own top-r SVD and learns only a per-direction singular-value delta plus a block-diagonal Cayley rotation of that frozen basis. The singular directions stay interpretable and the adapter is tiny (15K params, ~230x smaller than LoRA's 3.54M) yet stays within noise of the full-rank adapters. The default rotates the input basis (V); rotating the output (U), both, or neither are `rotate_basis` ablation axes.
