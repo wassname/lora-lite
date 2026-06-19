@@ -4,6 +4,8 @@ from pathlib import Path
 
 
 SCRIPT_PATH = Path(__file__).parents[1] / "scripts" / "metamath_gsm8k_benchmark.py"
+# the script uses sibling imports (`from _cost import ...`), so scripts/ must be importable
+sys.path.insert(0, str(SCRIPT_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("metamath_gsm8k_benchmark", SCRIPT_PATH)
 benchmark = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
